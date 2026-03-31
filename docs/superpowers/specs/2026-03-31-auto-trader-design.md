@@ -152,7 +152,7 @@ Every trade signal passes through the Risk Manager before execution. Also monito
 
 ### Account-Level Limits
 
-- **Max portfolio delta**: keep overall directional exposure bounded
+- **Max portfolio delta**: keep overall directional exposure bounded (default: max 0.30 net delta per symbol)
 - **Max buying power usage**: never deploy more than X% of account (default: 60%)
 - **Daily loss circuit breaker**: stop all trading if daily losses exceed hard limit
 
