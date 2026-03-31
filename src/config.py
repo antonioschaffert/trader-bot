@@ -1,0 +1,127 @@
+import os
+from dataclasses import dataclass, field
+from pathlib import Path
+
+import yaml
+from dotenv import load_dotenv
+
+
+@dataclass
+class SwingConfig:
+    target_dte: list[int]
+    short_strike_delta: list[float]
+    spread_width: dict[str, int]
+    min_premium: float
+    iv_rank_threshold: int
+    profit_target_pct: int
+
+
+@dataclass
+class ExhaustionConfig:
+    enabled: bool
+    target_dte: list[int]
+    spread_width: dict[str, int]
+    min_premium: float
+    profit_target_pct: int
+    stop_loss_multiplier: float
+    time_window_start: str
+    rsi_overbought: int
+    rsi_oversold: int
+    intraday_timeframe: str
+    min_signals_required: int
+    close_by_eod: bool
+
+
+@dataclass
+class RiskConfig:
+    max_concurrent_spreads: int
+    max_risk_per_trade_pct: int
+    max_buying_power_usage_pct: int
+    stop_loss_multiplier: float
+    roll_delta_threshold: float
+    dte_exit: int
+    daily_loss_limit: int
+    daily_income_target: int
+    max_same_direction_per_symbol: int
+    max_portfolio_delta_per_symbol: float
+
+
+@dataclass
+class ExecutionConfig:
+    price_adjustment_interval: int
+    price_adjustment_step: float
+    fill_timeout: int
+
+
+@dataclass
+class ScheduleConfig:
+    scan_interval_minutes: int
+    market_hours_only: bool
+
+
+@dataclass
+class NotificationsConfig:
+    sms_enabled: bool
+    email_enabled: bool
+    sms_events: list[str]
+    email_events: list[str]
+
+
+@dataclass
+class AppConfig:
+    symbols: list[str]
+    swing: SwingConfig
+    exhaustion: ExhaustionConfig
+    risk: RiskConfig
+    execution: ExecutionConfig
+    schedule: ScheduleConfig
+    notifications: NotificationsConfig
+
+    # From environment variables
+    alpaca_api_key: str = ""
+    alpaca_api_secret: str = ""
+    alpaca_paper: bool = True
+    mongodb_uri: str = "mongodb://localhost:27017"
+    mongodb_db_name: str = "auto_trader"
+    twilio_account_sid: str = ""
+    twilio_auth_token: str = ""
+    twilio_from_number: str = ""
+    twilio_to_number: str = ""
+    email_host: str = ""
+    email_port: int = 587
+    email_username: str = ""
+    email_password: str = ""
+    email_to: str = ""
+
+
+def load_config(config_path: str = "config/config.yaml") -> AppConfig:
+    env_path = Path(config_path).parent / ".env"
+    if env_path.exists():
+        load_dotenv(str(env_path))
+
+    with open(config_path) as f:
+        raw = yaml.safe_load(f)
+
+    return AppConfig(
+        symbols=raw["symbols"],
+        swing=SwingConfig(**raw["swing"]),
+        exhaustion=ExhaustionConfig(**raw["exhaustion"]),
+        risk=RiskConfig(**raw["risk"]),
+        execution=ExecutionConfig(**raw["execution"]),
+        schedule=ScheduleConfig(**raw["schedule"]),
+        notifications=NotificationsConfig(**raw["notifications"]),
+        alpaca_api_key=os.getenv("ALPACA_API_KEY", ""),
+        alpaca_api_secret=os.getenv("ALPACA_API_SECRET", ""),
+        alpaca_paper=os.getenv("ALPACA_PAPER", "true").lower() == "true",
+        mongodb_uri=os.getenv("MONGODB_URI", "mongodb://localhost:27017"),
+        mongodb_db_name=os.getenv("MONGODB_DB_NAME", "auto_trader"),
+        twilio_account_sid=os.getenv("TWILIO_ACCOUNT_SID", ""),
+        twilio_auth_token=os.getenv("TWILIO_AUTH_TOKEN", ""),
+        twilio_from_number=os.getenv("TWILIO_FROM_NUMBER", ""),
+        twilio_to_number=os.getenv("TWILIO_TO_NUMBER", ""),
+        email_host=os.getenv("EMAIL_HOST", ""),
+        email_port=int(os.getenv("EMAIL_PORT", "587")),
+        email_username=os.getenv("EMAIL_USERNAME", ""),
+        email_password=os.getenv("EMAIL_PASSWORD", ""),
+        email_to=os.getenv("EMAIL_TO", ""),
+    )
