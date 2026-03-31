@@ -71,5 +71,7 @@ class MarketSnapshot:
     iv_rank: float | None = None
     high_of_day: float = 0.0
     low_of_day: float = 0.0
+    open_price: float = 0.0
+    prev_close: float = 0.0
     intraday_bars: list[Bar] = field(default_factory=list)
     intraday_indicators: Indicators | None = None

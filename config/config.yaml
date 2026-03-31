@@ -23,7 +23,9 @@ exhaustion:
   rsi_overbought: 70
   rsi_oversold: 30
   intraday_timeframe: "5min"
-  min_signals_required: 2
+  min_signals_required: 3
+  min_move_from_open_pct: 0.8
+  strong_move_pct: 1.5
   close_by_eod: true
 
 risk:
