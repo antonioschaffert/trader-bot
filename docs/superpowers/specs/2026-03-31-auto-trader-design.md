@@ -95,9 +95,13 @@ Lightweight in-process pub/sub. Not an external message queue. Modules publish a
 
 ## Signal Generator
 
-Takes market data and outputs trade signals. This is the decision engine.
+Takes market data and outputs trade signals. This is the decision engine. Runs two strategy modes concurrently.
 
-### Decision Logic (layered)
+### Strategy Mode 1: Swing (7-10 DTE)
+
+The core premium collection strategy. Sells spreads with 7-10 DTE based on daily-timeframe signals.
+
+**Decision logic (layered):**
 
 **1. Volatility filter:**
 - Check IV rank/percentile for the symbol
@@ -119,13 +123,55 @@ Takes market data and outputs trade signals. This is the decision engine.
 - Sufficient open interest and volume on selected strikes
 - Not already at max positions for that symbol/direction
 
+**5. Exit:**
+- Profit target: 50% of max profit (configurable)
+- Stop-loss, rolling, and DTE exit managed by Risk Manager
+
+### Strategy Mode 2: Intraday Exhaustion (1-2 DTE)
+
+A short-dated scalp strategy that fades overextended intraday moves in either direction.
+
+**Concept:** When the market makes a strong directional move from the open and shows signs of exhaustion, sell spreads against the move using 1-2 DTE options and take quick profits.
+
+**Detection signals (intraday timeframe, e.g., 5-min or 15-min bars):**
+- Price extended significantly above/below VWAP
+- RSI overbought (>70) or oversold (<30) on intraday timeframe
+- Volume declining on the move (exhaustion sign)
+- Price hitting upper/lower bollinger band on intraday chart
+- Time window: primarily ~11am ET onward (after the initial move develops)
+
+**Direction:**
+- Upside exhaustion (rally fading) → sell **call spreads** with strikes near/above high of day
+- Downside exhaustion (selloff fading) → sell **put spreads** with strikes near/below low of day
+
+**Strike selection:**
+- Short strike: near or just beyond the high/low of day
+- Spread width: same as swing mode (configurable per symbol)
+- DTE: 1-2 days
+
+**Entry rules:**
+- Exhaustion signals must confirm (configurable how many signals required)
+- Minimum premium threshold (can be lower than swing mode since targeting quick exit)
+- Not already in an exhaustion trade for the same symbol/direction
+
+**Exit:**
+- Profit target: **20% of max profit** (quick scalp — configurable)
+- Stop-loss: tighter than swing mode given short DTE (e.g., 1.5x premium)
+- Close by end of day or at DTE exit threshold
+
+### Both Modes Run Concurrently
+
+On any given day the bot can have open swing (7-10 DTE) spreads AND take intraday exhaustion trades. The Risk Manager accounts for combined exposure across both modes when checking position limits, buying power, and portfolio delta.
+
 ### Output
 
 `TradeSignal` event containing:
+- Strategy mode (swing or exhaustion)
 - Symbol (SPY or QQQ)
 - Spread type (put spread, call spread, iron condor)
 - Strikes (short strike, long strike, expiration)
 - Target premium
+- Profit target percentage (50% for swing, 20% for exhaustion)
 - Reasoning (which signals triggered the trade)
 
 All thresholds and parameters are configurable via YAML — no code changes needed to tune.
@@ -237,14 +283,33 @@ All tunable parameters in a single YAML config file:
 # symbols
 symbols: ["SPY", "QQQ"]
 
-# strategy
-target_dte: [7, 10]
-short_strike_delta: [0.15, 0.30]
-spread_width:
-  SPY: 5
-  QQQ: 3
-min_premium: 0.50
-iv_rank_threshold: 30
+# strategy — swing mode (7-10 DTE)
+swing:
+  target_dte: [7, 10]
+  short_strike_delta: [0.15, 0.30]
+  spread_width:
+    SPY: 5
+    QQQ: 3
+  min_premium: 0.50
+  iv_rank_threshold: 30
+  profit_target_pct: 50
+
+# strategy — exhaustion mode (1-2 DTE)
+exhaustion:
+  enabled: true
+  target_dte: [1, 2]
+  spread_width:
+    SPY: 5
+    QQQ: 3
+  min_premium: 0.25
+  profit_target_pct: 20
+  stop_loss_multiplier: 1.5
+  time_window_start: "11:00"        # ET, earliest entry
+  rsi_overbought: 70
+  rsi_oversold: 30
+  intraday_timeframe: "5min"
+  min_signals_required: 2           # how many exhaustion signals must confirm
+  close_by_eod: true
 
 # risk
 max_concurrent_spreads: 10
