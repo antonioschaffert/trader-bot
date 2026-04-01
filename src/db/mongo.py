@@ -37,3 +37,25 @@ class MongoStore:
 
     def save_order_log(self, order: dict) -> None:
         self.db["order_logs"].insert_one(order)
+
+    def save_scan_rejection(self, record: dict) -> None:
+        self.db["scan_rejections"].insert_one(record)
+
+    def get_settings(self) -> dict | None:
+        doc = self.db["settings"].find_one({"_id": "config"})
+        if doc is None:
+            return None
+        doc.pop("_id", None)
+        return doc
+
+    def save_settings(self, settings: dict) -> dict:
+        self.db["settings"].update_one(
+            {"_id": "config"},
+            {"$set": {**settings, "updated_at": datetime.now(timezone.utc)}},
+            upsert=True,
+        )
+        return self.get_settings()
+
+    def seed_settings(self, defaults: dict) -> None:
+        if self.get_settings() is None:
+            self.save_settings(defaults)
