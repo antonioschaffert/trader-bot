@@ -60,6 +60,12 @@ class TradingScheduler:
     def _scan_loop(self) -> None:
         if not self._is_market_hours():
             return
+        # Reload config from DB
+        try:
+            from src.config import load_config
+            self._config = load_config(db=self._db)
+        except Exception:
+            logger.exception("Failed to reload config from DB, using cached config")
         for symbol in self._config.symbols:
             try:
                 self._scan_symbol(symbol)
@@ -68,6 +74,7 @@ class TradingScheduler:
 
     def _scan_symbol(self, symbol: str) -> None:
         logger.info(f"Scanning {symbol}")
+        scan_time = datetime.now(timezone.utc)
         price = self._market_data.get_latest_price(symbol)
         daily_bars = self._market_data.get_daily_bars(symbol, limit=60)
         indicators = compute_indicators(daily_bars)
@@ -77,15 +84,18 @@ class TradingScheduler:
         iv_history_values = [r["iv"] for r in iv_records]
         current_iv = self._get_atm_iv(symbol, price)
         if current_iv > 0:
-            self._db.save_iv_record({"symbol": symbol, "iv": current_iv, "timestamp": datetime.now(timezone.utc)})
+            self._db.save_iv_record({"symbol": symbol, "iv": current_iv, "timestamp": scan_time})
         iv_rank = compute_iv_rank(current_iv, iv_history_values) if iv_history_values and current_iv > 0 else None
+
+        all_rejections = []
 
         # Swing strategy
         swing_chain = self._market_data.get_options_chain(symbol, min_dte=self._config.swing.target_dte[0], max_dte=self._config.swing.target_dte[1])
         self._market_data.enrich_chain_with_quotes(swing_chain)
         swing_snapshot = MarketSnapshot(symbol=symbol, price=price, bars=daily_bars, options_chain=swing_chain, indicators=indicators, iv_rank=iv_rank)
-        swing_signals = self._swing_gen.evaluate(swing_snapshot)
-        self._process_signals(swing_signals)
+        swing_result = self._swing_gen.evaluate(swing_snapshot)
+        all_rejections.extend(swing_result.rejections)
+        self._process_signals(swing_result.signals, symbol, scan_time, all_rejections)
 
         # Exhaustion strategy
         if self._config.exhaustion.enabled:
@@ -100,10 +110,30 @@ class TradingScheduler:
                 low_of_day=min((b.low for b in intraday_bars), default=0),
                 intraday_bars=intraday_bars, intraday_indicators=intraday_indicators,
             )
-            exhaustion_signals = self._exhaustion_gen.evaluate(exhaustion_snapshot)
-            self._process_signals(exhaustion_signals)
+            exhaustion_result = self._exhaustion_gen.evaluate(exhaustion_snapshot)
+            all_rejections.extend(exhaustion_result.rejections)
+            self._process_signals(exhaustion_result.signals, symbol, scan_time, all_rejections)
 
-    def _process_signals(self, signals) -> None:
+        # Save all rejections for this scan to MongoDB
+        if all_rejections:
+            snapshot_vars = {
+                "price": round(price, 2),
+                "iv_rank": round(iv_rank, 2) if iv_rank is not None else None,
+                "current_iv": round(current_iv, 4) if current_iv else None,
+                "rsi": round(indicators.rsi, 2) if indicators.rsi is not None else None,
+                "sma_50": round(indicators.sma_50, 2) if indicators.sma_50 is not None else None,
+                "sma_20": round(indicators.sma_20, 2) if indicators.sma_20 is not None else None,
+            }
+            self._db.save_scan_rejection({
+                "symbol": symbol,
+                "timestamp": scan_time,
+                "market_snapshot": snapshot_vars,
+                "rejections": all_rejections,
+            })
+
+    def _process_signals(self, signals, symbol: str, scan_time: datetime, rejections: list) -> None:
+        if not signals:
+            return
         account = self._trading_client.get_account()
         for signal in signals:
             result = self._risk_manager.validate_signal(signal, open_positions=self._positions.open_positions, account=account, daily_pnl=self._positions.daily_pnl)
@@ -114,6 +144,15 @@ class TradingScheduler:
             else:
                 logger.info(f"Signal rejected: {result.reason}")
                 self._bus.publish("SignalRejected", {"signal": signal, "reason": result.reason})
+                rejections.append({
+                    "strategy": signal.strategy_mode,
+                    "spread_type": signal.spread_type,
+                    "reason": f"risk_rejected: {result.reason}",
+                    "variables": {
+                        "target_premium": round(signal.target_premium, 4),
+                        "expiration": str(signal.expiration),
+                    },
+                })
 
     def _position_check_loop(self) -> None:
         if not self._is_market_hours():

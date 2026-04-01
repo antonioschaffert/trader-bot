@@ -32,6 +32,7 @@ def main():
 
     event_bus = EventBus()
     db = MongoStore(config.mongodb_uri, config.mongodb_db_name)
+    config = load_config(db=db)
 
     trading_client = TradingClient(config.alpaca_api_key, config.alpaca_api_secret, paper=config.alpaca_paper)
     stock_client = StockHistoricalDataClient(config.alpaca_api_key, config.alpaca_api_secret)
