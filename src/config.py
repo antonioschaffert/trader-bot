@@ -1,3 +1,4 @@
+import copy
 import os
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -29,6 +30,8 @@ class ExhaustionConfig:
     rsi_oversold: int
     intraday_timeframe: str
     min_signals_required: int
+    min_move_from_open_pct: float
+    strong_move_pct: float
     close_by_eod: bool
 
 
@@ -94,13 +97,32 @@ class AppConfig:
     email_to: str = ""
 
 
-def load_config(config_path: str = "config/config.yaml") -> AppConfig:
+def _deep_merge(base: dict, override: dict) -> dict:
+    """Deep-merge override into a copy of base. Does NOT mutate base."""
+    result = copy.deepcopy(base)
+    for key, value in override.items():
+        if key in result and isinstance(result[key], dict) and isinstance(value, dict):
+            result[key] = _deep_merge(result[key], value)
+        else:
+            result[key] = copy.deepcopy(value)
+    return result
+
+
+def load_config(config_path: str = "config/config.yaml", db=None) -> AppConfig:
     env_path = Path(config_path).parent / ".env"
     if env_path.exists():
         load_dotenv(str(env_path))
 
     with open(config_path) as f:
         raw = yaml.safe_load(f)
+
+    if db is not None:
+        settings = db.get_settings()
+        if settings:
+            settings.pop("updated_at", None)
+            raw = _deep_merge(raw, settings)
+        else:
+            db.seed_settings(raw)
 
     return AppConfig(
         symbols=raw["symbols"],

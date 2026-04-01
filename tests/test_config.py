@@ -30,6 +30,8 @@ def _write_config(tmp_dir: Path, overrides: dict | None = None) -> Path:
             "rsi_oversold": 30,
             "intraday_timeframe": "5min",
             "min_signals_required": 2,
+            "min_move_from_open_pct": 0.8,
+            "strong_move_pct": 1.5,
             "close_by_eod": True,
         },
         "risk": {
