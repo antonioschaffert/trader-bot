@@ -12,3 +12,8 @@ venv/
 .pytest_cache/
 .mypy_cache/
 *.log
+.superpowers/
+
+# Frontend
+frontend/node_modules/
+frontend/dist/
