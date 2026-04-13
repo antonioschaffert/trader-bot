@@ -1,5 +1,6 @@
 import { useState } from "react";
 import type { RejectionsResponse } from "@/lib/api";
+import { formatDateTimeET } from "@/lib/time";
 import {
   Table,
   TableBody,
@@ -43,14 +44,14 @@ export function RejectionTable({ data, onFilterChange, symbols }: Props) {
     });
   };
 
-  const handleSymbolChange = (value: string) => {
-    const v = value === "__all__" ? "" : value;
+  const handleSymbolChange = (value: string | null) => {
+    const v = !value || value === "__all__" ? "" : value;
     setSelectedSymbol(v);
     onFilterChange(v, selectedStrategy);
   };
 
-  const handleStrategyChange = (value: string) => {
-    const v = value === "__all__" ? "" : value;
+  const handleStrategyChange = (value: string | null) => {
+    const v = !value || value === "__all__" ? "" : value;
     setSelectedStrategy(v);
     onFilterChange(selectedSymbol, v);
   };
@@ -64,11 +65,11 @@ export function RejectionTable({ data, onFilterChange, symbols }: Props) {
             value={selectedSymbol || "__all__"}
             onValueChange={handleSymbolChange}
           >
-            <SelectTrigger>
-              <SelectValue placeholder="All symbols" />
+            <SelectTrigger className="w-[140px]">
+              <SelectValue />
             </SelectTrigger>
             <SelectContent>
-              <SelectItem value="__all__">All symbols</SelectItem>
+              <SelectItem value="__all__">All Symbols</SelectItem>
               {symbols.map((s) => (
                 <SelectItem key={s} value={s}>
                   {s}
@@ -81,11 +82,11 @@ export function RejectionTable({ data, onFilterChange, symbols }: Props) {
             value={selectedStrategy || "__all__"}
             onValueChange={handleStrategyChange}
           >
-            <SelectTrigger>
-              <SelectValue placeholder="All strategies" />
+            <SelectTrigger className="w-[160px]">
+              <SelectValue />
             </SelectTrigger>
             <SelectContent>
-              <SelectItem value="__all__">All strategies</SelectItem>
+              <SelectItem value="__all__">All Strategies</SelectItem>
               {STRATEGIES.map((s) => (
                 <SelectItem key={s} value={s}>
                   {s}
@@ -123,8 +124,8 @@ export function RejectionTable({ data, onFilterChange, symbols }: Props) {
                     className="cursor-pointer"
                     onClick={() => toggleExpanded(rowId)}
                   >
-                    <TableCell>
-                      {new Date(scan.timestamp).toLocaleString()}
+                    <TableCell className="text-xs">
+                      {formatDateTimeET(scan.timestamp)}
                     </TableCell>
                     <TableCell className="font-medium">
                       {scan.symbol}
