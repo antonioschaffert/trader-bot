@@ -1,3 +1,5 @@
+import os
+
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
@@ -5,9 +7,12 @@ from api.routes import status, market, rejections, trades, iv_history, settings
 
 app = FastAPI(title="Auto-Trader Dashboard API")
 
+_raw = os.environ.get("ALLOWED_ORIGINS", "http://localhost:5173")
+origins = [o.strip() for o in _raw.split(",") if o.strip()]
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:5173"],
+    allow_origins=origins,
     allow_methods=["*"],
     allow_headers=["*"],
 )
