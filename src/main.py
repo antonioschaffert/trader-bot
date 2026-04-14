@@ -88,6 +88,8 @@ def main():
         event_bus.subscribe("OrderFilled", lambda d: sms.notify_fill(d["signal"].symbol, d["signal"].spread_type, d.get("filled_price", 0)))
         event_bus.subscribe("StopLossHit", lambda d: sms.notify_stop_loss(d["position"].symbol, d["position"].spread_type, d["position"].unrealized_pnl))
         event_bus.subscribe("CircuitBreakerTriggered", lambda d: sms.notify_circuit_breaker(d.get("daily_pnl", 0)))
+        event_bus.subscribe("RollTriggered", lambda d: sms.notify_roll(d["position"].symbol, d["position"].spread_type))
+        event_bus.subscribe("ProfitTargetHit", lambda d: sms.notify_fill(d["position"].symbol, "PROFIT TARGET", d["position"].unrealized_pnl))
 
     scheduler = TradingScheduler(
         config=config, event_bus=event_bus, market_data=market_data,
