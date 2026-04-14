@@ -8,10 +8,13 @@ router = APIRouter()
 
 
 @router.get("/wheel")
-def get_wheel_status():
+def get_wheel_status(account_id: str = Query("", description="Filter by account")):
     """Return current wheel state for all symbols."""
     db = get_db()
-    states = list(db["wheel_state"].find())
+    query = {}
+    if account_id:
+        query["account_id"] = account_id
+    states = list(db["wheel_state"].find(query))
     for s in states:
         s["_id"] = str(s["_id"])
         # Serialize datetime fields
@@ -26,11 +29,14 @@ def get_wheel_status():
 @router.get("/wheel/history")
 def get_wheel_history(
     symbol: str = Query("", description="Filter by symbol"),
+    account_id: str = Query("", description="Filter by account"),
     limit: int = Query(50, ge=1, le=200),
 ):
     """Return completed wheel trades (CSP/CC legs)."""
     db = get_db()
     query = {"strategy_mode": "wheel"}
+    if account_id:
+        query["account_id"] = account_id
     if symbol:
         query["symbol"] = symbol
 

@@ -138,6 +138,46 @@ class MongoStore:
             doc["_id"] = str(doc["_id"])
         return doc
 
+    # --- Accounts ---
+    def get_accounts(self) -> list[dict]:
+        results = list(self.db["accounts"].find())
+        for r in results:
+            r["_id"] = str(r["_id"])
+        return results
+
+    def get_account(self, account_id: str) -> dict | None:
+        doc = self.db["accounts"].find_one({"account_id": account_id})
+        if doc:
+            doc["_id"] = str(doc["_id"])
+        return doc
+
+    def save_account(self, account: dict) -> None:
+        self.db["accounts"].update_one(
+            {"account_id": account["account_id"]},
+            {"$set": {**account, "updated_at": datetime.now(timezone.utc)}},
+            upsert=True,
+        )
+
+    def delete_account(self, account_id: str) -> None:
+        self.db["accounts"].delete_one({"account_id": account_id})
+
+    # --- Order Logs (with account filtering) ---
+    def get_order_logs(self, account_id: str = "", limit: int = 100) -> list[dict]:
+        query = {}
+        if account_id:
+            query["account_id"] = account_id
+        results = list(
+            self.db["order_logs"].find(query).sort("timestamp", -1).limit(limit)
+        )
+        for r in results:
+            r["_id"] = str(r["_id"])
+            if "timestamp" in r and hasattr(r["timestamp"], "isoformat"):
+                r["timestamp"] = r["timestamp"].isoformat()
+            # Normalize: submits without "action" field are opens
+            if "action" not in r:
+                r["action"] = "open"
+        return results
+
     # --- Performance Analytics (cached) ---
     def save_performance_cache(self, report: dict) -> None:
         self.db["performance"].update_one(

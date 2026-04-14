@@ -42,6 +42,8 @@ class OrderExecutor:
 
         self._db.save_order_log({
             "order_id": str(order.id),
+            "action": "open",
+            "symbol": signal.symbol,
             "signal": {
                 "strategy_mode": signal.strategy_mode,
                 "symbol": signal.symbol,
@@ -87,6 +89,7 @@ class OrderExecutor:
         self._db.save_order_log({
             "order_id": str(order.id),
             "action": "close",
+            "symbol": legs[0].symbol if legs else "",
             "status": str(order.status),
             "limit_price": limit_price,
             "timestamp": datetime.now(timezone.utc),
@@ -110,6 +113,8 @@ class OrderExecutor:
 
         self._db.save_order_log({
             "order_id": str(order.id),
+            "action": "wheel_open",
+            "symbol": signal.symbol,
             "signal": {
                 "strategy_mode": "wheel",
                 "symbol": signal.symbol,
@@ -150,7 +155,7 @@ class OrderExecutor:
         self._db.save_order_log({
             "order_id": str(order.id),
             "action": "wheel_close",
-            "option_symbol": option_symbol,
+            "symbol": option_symbol,
             "status": str(order.status),
             "limit_price": limit_price,
             "timestamp": datetime.now(timezone.utc),

@@ -48,6 +48,8 @@ class TradingScheduler:
         wheel_gen: WheelSignalGenerator | None = None,
         wheel_state: WheelStateManager | None = None,
         assignment_detector: AssignmentDetector | None = None,
+        account_id: str = "default",
+        strategies_enabled: dict | None = None,
     ):
         self._config = config
         self._bus = event_bus
@@ -61,6 +63,10 @@ class TradingScheduler:
         self._option_client = option_client
         self._db = db
         self._scheduler = BlockingScheduler()
+        self._account_id = account_id
+        self._strategies_enabled = strategies_enabled or {
+            "swing": True, "exhaustion": True, "wheel": False,
+        }
 
         # Enhanced components
         self._regime_detector = RegimeDetector()
@@ -81,23 +87,27 @@ class TradingScheduler:
         self._bus.subscribe("PositionClosed", self._on_position_closed)
 
     def start(self) -> None:
+        aid = self._account_id
         interval = self._config.schedule.scan_interval_minutes
-        self._scheduler.add_job(self._scan_loop, "interval", minutes=interval, id="scan_loop")
-        self._scheduler.add_job(self._position_check_loop, "interval", minutes=1, id="position_check")
-        self._scheduler.add_job(self._heartbeat, "interval", seconds=30, id="heartbeat")
-        self._scheduler.add_job(self._daily_reset, "cron", hour=9, minute=25, id="daily_reset")
-        # Compute analytics every 30 minutes
-        self._scheduler.add_job(self._update_analytics, "interval", minutes=30, id="analytics")
 
-        # Wheel strategy jobs (third strategy)
-        if self._config.wheel.enabled and self._wheel_gen:
-            self._scheduler.add_job(self._wheel_scan_loop, "interval", minutes=interval, id="wheel_scan")
-            self._scheduler.add_job(self._wheel_position_check, "interval", minutes=1, id="wheel_position_check")
-            self._scheduler.add_job(self._assignment_check_loop, "interval", minutes=2, id="assignment_check")
-            logger.info(f"Wheel strategy enabled: symbols={self._config.wheel.symbols}")
+        # Only add scan/position jobs if at least swing or exhaustion is enabled
+        if self._strategies_enabled.get("swing") or self._strategies_enabled.get("exhaustion"):
+            self._scheduler.add_job(self._scan_loop, "interval", minutes=interval, id=f"scan_{aid}")
+            self._scheduler.add_job(self._position_check_loop, "interval", minutes=1, id=f"pos_check_{aid}")
+
+        self._scheduler.add_job(self._heartbeat, "interval", seconds=30, id=f"heartbeat_{aid}")
+        self._scheduler.add_job(self._daily_reset, "cron", hour=9, minute=25, id=f"daily_reset_{aid}")
+        self._scheduler.add_job(self._update_analytics, "interval", minutes=30, id=f"analytics_{aid}")
+
+        # Wheel strategy jobs (if enabled for this account)
+        if self._strategies_enabled.get("wheel") and self._wheel_gen:
+            self._scheduler.add_job(self._wheel_scan_loop, "interval", minutes=interval, id=f"wheel_scan_{aid}")
+            self._scheduler.add_job(self._wheel_position_check, "interval", minutes=1, id=f"wheel_pos_{aid}")
+            self._scheduler.add_job(self._assignment_check_loop, "interval", minutes=2, id=f"assign_check_{aid}")
+            logger.info(f"[{aid}] Wheel strategy enabled: symbols={self._config.wheel.symbols}")
 
         self._heartbeat()
-        logger.info(f"Scheduler started (scan interval: {interval}min)")
+        logger.info(f"[{aid}] Scheduler started (scan interval: {interval}min, strategies={self._strategies_enabled})")
         self._scheduler.start()
 
     def stop(self) -> None:
@@ -236,20 +246,21 @@ class TradingScheduler:
 
         all_rejections = []
 
-        # Swing strategy
-        swing_chain = self._market_data.get_options_chain(symbol, min_dte=self._config.swing.target_dte[0], max_dte=self._config.swing.target_dte[1])
-        self._market_data.enrich_chain_with_quotes(swing_chain)
-        swing_snapshot = MarketSnapshot(
-            symbol=symbol, price=price, bars=daily_bars, options_chain=swing_chain,
-            indicators=indicators, iv_rank=iv_rank, iv_percentile=iv_percentile,
-            regime=self._current_regime,
-        )
-        swing_result = self._swing_gen.evaluate(swing_snapshot)
-        all_rejections.extend(swing_result.rejections)
-        self._process_signals(swing_result.signals, symbol, scan_time, all_rejections)
+        # Swing strategy (if enabled for this account)
+        if self._strategies_enabled.get("swing", True):
+            swing_chain = self._market_data.get_options_chain(symbol, min_dte=self._config.swing.target_dte[0], max_dte=self._config.swing.target_dte[1])
+            self._market_data.enrich_chain_with_quotes(swing_chain)
+            swing_snapshot = MarketSnapshot(
+                symbol=symbol, price=price, bars=daily_bars, options_chain=swing_chain,
+                indicators=indicators, iv_rank=iv_rank, iv_percentile=iv_percentile,
+                regime=self._current_regime,
+            )
+            swing_result = self._swing_gen.evaluate(swing_snapshot)
+            all_rejections.extend(swing_result.rejections)
+            self._process_signals(swing_result.signals, symbol, scan_time, all_rejections)
 
-        # Exhaustion strategy
-        if self._config.exhaustion.enabled:
+        # Exhaustion strategy (if enabled for this account)
+        if self._strategies_enabled.get("exhaustion", True) and self._config.exhaustion.enabled:
             exhaustion_chain = self._market_data.get_options_chain(symbol, min_dte=self._config.exhaustion.target_dte[0], max_dte=self._config.exhaustion.target_dte[1])
             self._market_data.enrich_chain_with_quotes(exhaustion_chain)
             intraday_bars = self._market_data.get_intraday_bars(symbol)
@@ -290,6 +301,7 @@ class TradingScheduler:
                     "vix": round(self._current_regime.vix_current, 1),
                 }
             self._db.save_scan_rejection({
+                "account_id": self._account_id,
                 "symbol": symbol,
                 "timestamp": scan_time,
                 "market_snapshot": snapshot_vars,
@@ -502,6 +514,7 @@ class TradingScheduler:
         # Save rejections
         if result.rejections:
             self._db.save_scan_rejection({
+                "account_id": self._account_id,
                 "symbol": symbol,
                 "timestamp": scan_time,
                 "market_snapshot": {"price": round(price, 2), "strategy": "wheel"},
@@ -652,8 +665,10 @@ class TradingScheduler:
     def _heartbeat(self) -> None:
         try:
             heartbeat_data = {
+                "account_id": self._account_id,
                 "timestamp": datetime.now(timezone.utc),
                 "market_hours": self._is_market_hours(),
+                "strategies_enabled": self._strategies_enabled,
             }
             # Include regime in heartbeat for dashboard
             if self._current_regime:
@@ -663,7 +678,7 @@ class TradingScheduler:
             heartbeat_data["drawdown"] = dd_state.to_dict()
 
             self._db.db["heartbeat"].update_one(
-                {"_id": "bot"},
+                {"_id": f"bot_{self._account_id}"},
                 {"$set": heartbeat_data},
                 upsert=True,
             )

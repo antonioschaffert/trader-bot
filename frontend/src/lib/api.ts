@@ -35,6 +35,40 @@ export interface DrawdownData {
   win_rate: number;
 }
 
+export interface AccountStatus {
+  account_id: string;
+  name: string;
+  is_paper: boolean;
+  enabled: boolean;
+  running: boolean;
+  strategies: Record<string, boolean>;
+}
+
+export interface Account {
+  account_id: string;
+  name: string;
+  is_paper: boolean;
+  enabled: boolean;
+  strategies: Record<string, boolean>;
+  symbols: string[];
+  api_key_masked?: string;
+  api_secret_masked?: string;
+  created_at?: string;
+  updated_at?: string;
+}
+
+export interface OrderLog {
+  _id: string;
+  order_id: string;
+  action: string;
+  symbol?: string;
+  signal?: Record<string, unknown>;
+  status: string;
+  timestamp: string;
+  limit_price?: number;
+  account_id?: string;
+}
+
 export interface StatusData {
   running: boolean;
   scanning: boolean;
@@ -44,6 +78,7 @@ export interface StatusData {
   symbols: string[];
   regime: RegimeData | null;
   drawdown: DrawdownData | null;
+  accounts: AccountStatus[];
 }
 
 export interface MarketData {
@@ -218,35 +253,86 @@ async function fetchJson<T>(path: string): Promise<T> {
   return res.json();
 }
 
+async function postJson<T>(path: string, body: unknown): Promise<T> {
+  const res = await fetch(`${BASE}${path}`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", ...authHeaders() },
+    body: JSON.stringify(body),
+  });
+  if (res.status === 401) { clearCredentials(); throw new Error("unauthorized"); }
+  if (!res.ok) throw new Error(`API error: ${res.status}`);
+  return res.json();
+}
+
+async function putJson<T>(path: string, body: unknown): Promise<T> {
+  const res = await fetch(`${BASE}${path}`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json", ...authHeaders() },
+    body: JSON.stringify(body),
+  });
+  if (res.status === 401) { clearCredentials(); throw new Error("unauthorized"); }
+  if (!res.ok) throw new Error(`API error: ${res.status}`);
+  return res.json();
+}
+
+async function deleteJson<T>(path: string): Promise<T> {
+  const res = await fetch(`${BASE}${path}`, {
+    method: "DELETE",
+    headers: authHeaders(),
+  });
+  if (res.status === 401) { clearCredentials(); throw new Error("unauthorized"); }
+  if (!res.ok) throw new Error(`API error: ${res.status}`);
+  return res.json();
+}
+
+/** Append ?account_id=X if non-empty */
+function acctParam(accountId: string): string {
+  return accountId ? `account_id=${encodeURIComponent(accountId)}` : "";
+}
+
+function withAcct(path: string, accountId: string): string {
+  const p = acctParam(accountId);
+  if (!p) return path;
+  return path.includes("?") ? `${path}&${p}` : `${path}?${p}`;
+}
+
 export const api = {
-  getStatus: () => fetchJson<StatusData>("/status"),
+  // Account-aware endpoints (pass accountId="" for all)
+  getStatus: (accountId = "") => fetchJson<StatusData>(withAcct("/status", accountId)),
   getMarket: () => fetchJson<MarketData[]>("/market"),
-  getRejections: (limit = 50, symbol = "", strategy = "") => {
+  getRejections: (limit = 50, symbol = "", strategy = "", accountId = "") => {
     const params = new URLSearchParams({ limit: String(limit) });
     if (symbol) params.set("symbol", symbol);
     if (strategy) params.set("strategy", strategy);
+    if (accountId) params.set("account_id", accountId);
     return fetchJson<RejectionsResponse>(`/rejections?${params}`);
   },
-  getTrades: () => fetchJson<TradesResponse>("/trades"),
+  getTrades: (accountId = "") => fetchJson<TradesResponse>(withAcct("/trades", accountId)),
+  getOrderLogs: (accountId = "", limit = 100) => {
+    const params = new URLSearchParams({ limit: String(limit) });
+    if (accountId) params.set("account_id", accountId);
+    return fetchJson<{ logs: OrderLog[] }>(`/order-logs?${params}`);
+  },
   getIvHistory: (symbol: string, days = 30) =>
     fetchJson<IvPoint[]>(`/iv-history?symbol=${symbol}&days=${days}`),
   getSettings: () => fetchJson<Settings>("/settings"),
   putSettings: async (settings: Partial<Settings>): Promise<Settings> => {
-    const res = await fetch(`${BASE}/settings`, {
-      method: "PUT",
-      headers: { "Content-Type": "application/json", ...authHeaders() },
-      body: JSON.stringify(settings),
-    });
-    if (res.status === 401) {
-      clearCredentials();
-      throw new Error("unauthorized");
-    }
-    if (!res.ok) throw new Error(`API error: ${res.status}`);
-    return res.json();
+    return putJson("/settings", settings);
   },
   getRegime: () => fetchJson<RegimeData>("/regime"),
-  getAnalytics: () => fetchJson<AnalyticsData>("/analytics"),
-  getPortfolioGreeks: () => fetchJson<PortfolioGreeksData>("/portfolio-greeks"),
-  getDrawdown: () => fetchJson<DrawdownData>("/drawdown"),
-  getWheel: () => fetchJson<WheelData>("/wheel"),
+  getAnalytics: (accountId = "") => fetchJson<AnalyticsData>(withAcct("/analytics", accountId)),
+  getPortfolioGreeks: (accountId = "") => fetchJson<PortfolioGreeksData>(withAcct("/portfolio-greeks", accountId)),
+  getDrawdown: (accountId = "") => fetchJson<DrawdownData>(withAcct("/drawdown", accountId)),
+  getWheel: (accountId = "") => fetchJson<WheelData>(withAcct("/wheel", accountId)),
+
+  // Account management
+  getAccounts: () => fetchJson<{ accounts: Account[] }>("/accounts"),
+  createAccount: (data: Partial<Account> & { api_key: string; api_secret: string }) =>
+    postJson<{ account: Account }>("/accounts", data),
+  updateAccount: (accountId: string, data: Partial<Account>) =>
+    putJson<{ account: Account }>(`/accounts/${accountId}`, data),
+  deleteAccount: (accountId: string) =>
+    deleteJson<{ deleted: boolean }>(`/accounts/${accountId}`),
+  toggleAccount: (accountId: string) =>
+    postJson<{ account_id: string; enabled: boolean }>(`/accounts/${accountId}/toggle`, {}),
 };

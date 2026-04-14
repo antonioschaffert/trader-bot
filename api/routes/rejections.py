@@ -8,9 +8,12 @@ def get_rejections(
     limit: int = Query(50, ge=1, le=500),
     symbol: str = Query(""),
     strategy: str = Query(""),
+    account_id: str = Query(""),
 ):
     db = get_db()
     query = {}
+    if account_id:
+        query["account_id"] = account_id
     if symbol:
         query["symbol"] = symbol
     if strategy:
