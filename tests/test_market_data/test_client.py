@@ -67,7 +67,9 @@ def test_get_daily_bars_returns_bars(client, mock_stock_client):
     mock_bar.volume = 1000000
     mock_bar.vwap = 501.5
 
-    mock_stock_client.get_stock_bars.return_value = {"SPY": [mock_bar]}
+    mock_response = MagicMock()
+    mock_response.data = {"SPY": [mock_bar]}
+    mock_stock_client.get_stock_bars.return_value = mock_response
 
     bars = client.get_daily_bars("SPY", limit=50)
     assert len(bars) == 1

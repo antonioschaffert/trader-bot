@@ -179,7 +179,8 @@ def _make_snapshot_downside_exhaustion():
 def test_upside_exhaustion_generates_call_spread(exhaustion_config, event_bus):
     snapshot = _make_snapshot_upside_exhaustion()
     gen = ExhaustionSignalGenerator(exhaustion_config, event_bus)
-    signals = gen.evaluate(snapshot, current_time=dtime(11, 30))
+    result = gen.evaluate(snapshot, current_time=dtime(11, 30))
+    signals = result.signals
     assert len(signals) == 1
     assert signals[0].spread_type == "call_spread"
     assert signals[0].strategy_mode == "exhaustion"
@@ -189,7 +190,8 @@ def test_upside_exhaustion_generates_call_spread(exhaustion_config, event_bus):
 def test_downside_exhaustion_generates_put_spread(exhaustion_config, event_bus):
     snapshot = _make_snapshot_downside_exhaustion()
     gen = ExhaustionSignalGenerator(exhaustion_config, event_bus)
-    signals = gen.evaluate(snapshot, current_time=dtime(11, 30))
+    result = gen.evaluate(snapshot, current_time=dtime(11, 30))
+    signals = result.signals
     assert len(signals) == 1
     assert signals[0].spread_type == "put_spread"
 
@@ -197,7 +199,8 @@ def test_downside_exhaustion_generates_put_spread(exhaustion_config, event_bus):
 def test_no_signal_before_time_window(exhaustion_config, event_bus):
     snapshot = _make_snapshot_upside_exhaustion()
     gen = ExhaustionSignalGenerator(exhaustion_config, event_bus)
-    signals = gen.evaluate(snapshot, current_time=dtime(10, 0))
+    result = gen.evaluate(snapshot, current_time=dtime(10, 0))
+    signals = result.signals
     assert len(signals) == 0
 
 
@@ -205,7 +208,8 @@ def test_no_signal_when_disabled(exhaustion_config, event_bus):
     exhaustion_config["enabled"] = False
     snapshot = _make_snapshot_upside_exhaustion()
     gen = ExhaustionSignalGenerator(exhaustion_config, event_bus)
-    signals = gen.evaluate(snapshot, current_time=dtime(11, 30))
+    result = gen.evaluate(snapshot, current_time=dtime(11, 30))
+    signals = result.signals
     assert len(signals) == 0
 
 
@@ -225,7 +229,8 @@ def test_no_signal_insufficient_exhaustion_signals(exhaustion_config, event_bus)
         ),
     )
     gen = ExhaustionSignalGenerator(exhaustion_config, event_bus)
-    signals = gen.evaluate(snapshot, current_time=dtime(11, 30))
+    result = gen.evaluate(snapshot, current_time=dtime(11, 30))
+    signals = result.signals
     assert len(signals) == 0
 
 
@@ -243,7 +248,8 @@ def test_no_signal_small_move(exhaustion_config, event_bus):
         intraday_indicators=Indicators(rsi=75.0, vwap=500.0, upper_bollinger=502.0, lower_bollinger=498.0),
     )
     gen = ExhaustionSignalGenerator(exhaustion_config, event_bus)
-    signals = gen.evaluate(snapshot, current_time=dtime(11, 30))
+    result = gen.evaluate(snapshot, current_time=dtime(11, 30))
+    signals = result.signals
     assert len(signals) == 0
 
 
@@ -251,7 +257,8 @@ def test_volume_declining_detection(exhaustion_config, event_bus):
     """Verify volume declining is detected in the signal reasoning."""
     snapshot = _make_snapshot_upside_exhaustion()
     gen = ExhaustionSignalGenerator(exhaustion_config, event_bus)
-    signals = gen.evaluate(snapshot, current_time=dtime(11, 30))
+    result = gen.evaluate(snapshot, current_time=dtime(11, 30))
+    signals = result.signals
     assert len(signals) == 1
     reasoning = " ".join(signals[0].reasoning)
     assert "Volume declining: True" in reasoning
@@ -260,7 +267,8 @@ def test_volume_declining_detection(exhaustion_config, event_bus):
 def test_reasoning_includes_move_from_open(exhaustion_config, event_bus):
     snapshot = _make_snapshot_upside_exhaustion()
     gen = ExhaustionSignalGenerator(exhaustion_config, event_bus)
-    signals = gen.evaluate(snapshot, current_time=dtime(11, 30))
+    result = gen.evaluate(snapshot, current_time=dtime(11, 30))
+    signals = result.signals
     assert len(signals) == 1
     reasoning = " ".join(signals[0].reasoning)
     assert "from open" in reasoning

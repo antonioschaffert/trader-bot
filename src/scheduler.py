@@ -424,6 +424,7 @@ class TradingScheduler:
     def _daily_reset(self) -> None:
         self._positions.reset_daily()
         self._risk_manager.drawdown_manager.reset_daily()
+        self._daily_bars_cache = {}
         # Compute fresh analytics at start of day
         self._update_analytics()
         logger.info("Daily reset complete")

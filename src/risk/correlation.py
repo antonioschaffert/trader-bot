@@ -122,11 +122,11 @@ class CorrelationManager:
 
         returns_a = [
             (bars_a[i].close - bars_a[i - 1].close) / bars_a[i - 1].close
-            for i in range(len(bars_a) - min_len, len(bars_a))
+            for i in range(max(1, len(bars_a) - min_len), len(bars_a))
         ]
         returns_b = [
             (bars_b[i].close - bars_b[i - 1].close) / bars_b[i - 1].close
-            for i in range(len(bars_b) - min_len, len(bars_b))
+            for i in range(max(1, len(bars_b) - min_len), len(bars_b))
         ]
 
         n = len(returns_a)

@@ -74,7 +74,8 @@ def test_bullish_generates_put_spread(swing_config, event_bus):
     ]
     snapshot = _make_snapshot(price=500.0, rsi=55.0, sma_50=495.0, iv_rank=40.0, puts=puts)
     gen = SwingSignalGenerator(swing_config, event_bus)
-    signals = gen.evaluate(snapshot)
+    result = gen.evaluate(snapshot)
+    signals = result.signals
     assert len(signals) >= 1
     signal = signals[0]
     assert signal.spread_type == "put_spread"
@@ -89,7 +90,8 @@ def test_bearish_generates_call_spread(swing_config, event_bus):
     ]
     snapshot = _make_snapshot(price=490.0, rsi=45.0, sma_50=495.0, iv_rank=40.0, calls=calls)
     gen = SwingSignalGenerator(swing_config, event_bus)
-    signals = gen.evaluate(snapshot)
+    result = gen.evaluate(snapshot)
+    signals = result.signals
     assert len(signals) >= 1
     assert signals[0].spread_type == "call_spread"
 
@@ -98,7 +100,8 @@ def test_low_iv_rank_no_signal(swing_config, event_bus):
     puts = [_make_put_contract(495.0, -0.20), _make_put_contract(490.0, -0.10)]
     snapshot = _make_snapshot(price=500.0, rsi=55.0, sma_50=495.0, iv_rank=20.0, puts=puts)
     gen = SwingSignalGenerator(swing_config, event_bus)
-    signals = gen.evaluate(snapshot)
+    result = gen.evaluate(snapshot)
+    signals = result.signals
     assert len(signals) == 0
 
 
@@ -109,7 +112,8 @@ def test_signal_has_two_legs(swing_config, event_bus):
     ]
     snapshot = _make_snapshot(price=500.0, rsi=55.0, sma_50=495.0, iv_rank=40.0, puts=puts)
     gen = SwingSignalGenerator(swing_config, event_bus)
-    signals = gen.evaluate(snapshot)
+    result = gen.evaluate(snapshot)
+    signals = result.signals
     assert len(signals[0].legs) == 2
     sides = {leg.side for leg in signals[0].legs}
     assert sides == {"sell", "buy"}
@@ -122,5 +126,6 @@ def test_min_premium_filter(swing_config, event_bus):
     ]
     snapshot = _make_snapshot(price=500.0, rsi=55.0, sma_50=495.0, iv_rank=40.0, puts=puts)
     gen = SwingSignalGenerator(swing_config, event_bus)
-    signals = gen.evaluate(snapshot)
+    result = gen.evaluate(snapshot)
+    signals = result.signals
     assert len(signals) == 0

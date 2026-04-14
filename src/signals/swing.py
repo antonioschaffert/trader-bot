@@ -188,8 +188,8 @@ class SwingSignalGenerator:
             support_dist = (short_put.strike_price - support) / snapshot.price * 100
 
         reasoning = [
-            f"IV rank {snapshot.iv_rank:.0f}% above threshold {self._config['iv_rank_threshold']}%",
-            f"Bias: bullish (price {snapshot.price:.2f}, SMA50 {snapshot.indicators.sma_50:.2f})",
+            f"IV rank {snapshot.iv_rank:.0f}% above threshold {self._config['iv_rank_threshold']}%" if snapshot.iv_rank is not None else f"IV rank N/A (threshold {self._config['iv_rank_threshold']}% skipped)",
+            f"Bias: bullish (price {snapshot.price:.2f}, SMA50 {snapshot.indicators.sma_50:.2f})" if snapshot.indicators.sma_50 else f"Bias: bullish (price {snapshot.price:.2f})",
         ]
         if regime:
             reasoning.append(f"Regime: {getattr(regime, 'volatility_regime', 'N/A')} vol, {getattr(regime, 'trend_regime', 'N/A')} trend")
@@ -260,8 +260,8 @@ class SwingSignalGenerator:
             resistance_dist = (resistance - short_call.strike_price) / snapshot.price * 100
 
         reasoning = [
-            f"IV rank {snapshot.iv_rank:.0f}% above threshold {self._config['iv_rank_threshold']}%",
-            f"Bias: bearish (price {snapshot.price:.2f}, SMA50 {snapshot.indicators.sma_50:.2f})",
+            f"IV rank {snapshot.iv_rank:.0f}% above threshold {self._config['iv_rank_threshold']}%" if snapshot.iv_rank is not None else f"IV rank N/A (threshold {self._config['iv_rank_threshold']}% skipped)",
+            f"Bias: bearish (price {snapshot.price:.2f}, SMA50 {snapshot.indicators.sma_50:.2f})" if snapshot.indicators.sma_50 else f"Bias: bearish (price {snapshot.price:.2f})",
         ]
         if regime:
             reasoning.append(f"Regime: {getattr(regime, 'volatility_regime', 'N/A')} vol, {getattr(regime, 'trend_regime', 'N/A')} trend")
