@@ -8,8 +8,7 @@ import { TradeHistory } from "@/components/TradeHistory";
 import { SettingsPanel } from "@/components/SettingsPanel";
 import { LoginGate } from "@/components/LoginGate";
 
-export default function App() {
-  const [authed, setAuthed] = useState(hasCredentials());
+function Dashboard() {
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [rejSymbol, setRejSymbol] = useState("");
   const [rejStrategy, setRejStrategy] = useState("");
@@ -31,10 +30,6 @@ export default function App() {
     setRejSymbol(symbol);
     setRejStrategy(strategy);
   };
-
-  if (!authed) {
-    return <LoginGate onAuthenticated={() => setAuthed(true)} />;
-  }
 
   return (
     <div className="min-h-screen bg-background text-foreground">
@@ -63,4 +58,14 @@ export default function App() {
       />
     </div>
   );
+}
+
+export default function App() {
+  const [authed, setAuthed] = useState(hasCredentials());
+
+  if (!authed) {
+    return <LoginGate onAuthenticated={() => setAuthed(true)} />;
+  }
+
+  return <Dashboard />;
 }
