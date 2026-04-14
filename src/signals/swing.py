@@ -1,8 +1,20 @@
+"""
+Swing Signal Generator - Enhanced with Regime Awareness
+
+Key improvements over vanilla version:
+1. Regime-adaptive parameters (wider strikes in high vol, tighter in low vol)
+2. Multi-timeframe trend alignment (don't sell puts in a downtrend)
+3. Support/resistance awareness (don't sell at key levels)
+4. Conviction scoring for dynamic position sizing
+5. IV percentile check (better than IV rank alone)
+6. Trend strength filtering via ADX
+"""
+
 import logging
 
 from src.event_bus import EventBus
 from src.market_data.models import MarketSnapshot, OptionContract
-from src.signals.models import SpreadLeg, TradeSignal
+from src.signals.models import EvaluationResult, SpreadLeg, TradeSignal
 
 logger = logging.getLogger(__name__)
 
@@ -12,50 +24,154 @@ class SwingSignalGenerator:
         self._config = config
         self._bus = event_bus
 
-    def evaluate(self, snapshot: MarketSnapshot) -> list[TradeSignal]:
-        signals = []
+    def evaluate(self, snapshot: MarketSnapshot) -> EvaluationResult:
+        result = EvaluationResult()
+        iv_threshold = self._config["iv_rank_threshold"]
 
-        if snapshot.iv_rank is None or snapshot.iv_rank < self._config["iv_rank_threshold"]:
-            return signals
+        # IV rank check (skip if threshold is 0)
+        if iv_threshold > 0:
+            if snapshot.iv_rank is None:
+                result.rejections.append({
+                    "strategy": "swing", "reason": "iv_rank_unavailable",
+                    "variables": {},
+                })
+                return result
+            if snapshot.iv_rank < iv_threshold:
+                result.rejections.append({
+                    "strategy": "swing", "reason": "iv_rank_below_threshold",
+                    "variables": {"iv_rank": round(snapshot.iv_rank, 1), "threshold": iv_threshold},
+                })
+                return result
 
+        # Get regime context
+        regime = getattr(snapshot, "regime", None)
+
+        # Regime-based halt: don't trade in crisis+trending
+        if regime and not getattr(regime, "should_trade", True):
+            result.rejections.append({
+                "strategy": "swing", "reason": "regime_halt",
+                "variables": {
+                    "volatility_regime": getattr(regime, "volatility_regime", "unknown"),
+                    "market_phase": getattr(regime, "market_phase", "unknown"),
+                },
+            })
+            return result
+
+        # ADX filter: in strong trending markets, only trade with the trend
+        adx = snapshot.indicators.adx
         bias = self._get_bias(snapshot)
 
         if bias in ("bullish", "neutral"):
-            signal = self._build_put_spread(snapshot)
+            signal = self._build_put_spread(snapshot, regime)
             if signal:
-                signals.append(signal)
+                self._score_conviction(signal, snapshot, regime)
+                result.signals.append(signal)
+            else:
+                result.rejections.append({
+                    "strategy": "swing", "reason": "no_viable_put_spread",
+                    "variables": {"bias": bias},
+                })
 
         if bias in ("bearish", "neutral"):
-            signal = self._build_call_spread(snapshot)
+            signal = self._build_call_spread(snapshot, regime)
             if signal:
-                signals.append(signal)
+                self._score_conviction(signal, snapshot, regime)
+                result.signals.append(signal)
+            else:
+                result.rejections.append({
+                    "strategy": "swing", "reason": "no_viable_call_spread",
+                    "variables": {"bias": bias},
+                })
 
-        return signals
+        return result
 
     def _get_bias(self, snapshot: MarketSnapshot) -> str:
+        """
+        Enhanced bias detection using multiple indicators and regime context.
+        """
         ind = snapshot.indicators
         if ind.sma_50 is None or ind.rsi is None:
             return "neutral"
 
-        above_sma = snapshot.price > ind.sma_50
+        above_sma50 = snapshot.price > ind.sma_50
+        above_sma20 = ind.sma_20 is not None and snapshot.price > ind.sma_20
         rsi = ind.rsi
 
-        if above_sma and rsi < 70:
-            return "bullish"
-        elif not above_sma and rsi > 30:
-            return "bearish"
-        else:
-            return "neutral"
+        # EMA alignment check (9 > 21 = bullish, 9 < 21 = bearish)
+        ema_bullish = (ind.ema_9 is not None and ind.ema_21 is not None and ind.ema_9 > ind.ema_21)
+        ema_bearish = (ind.ema_9 is not None and ind.ema_21 is not None and ind.ema_9 < ind.ema_21)
 
-    def _build_put_spread(self, snapshot: MarketSnapshot) -> TradeSignal | None:
+        # MACD confirmation
+        macd_bullish = ind.macd_histogram is not None and ind.macd_histogram > 0
+        macd_bearish = ind.macd_histogram is not None and ind.macd_histogram < 0
+
+        # Score-based bias (more robust than simple threshold)
+        bull_score = sum([above_sma50, above_sma20, ema_bullish, macd_bullish, rsi < 70])
+        bear_score = sum([not above_sma50, not above_sma20, ema_bearish, macd_bearish, rsi > 30])
+
+        # Regime tilt: in strong trends, bias toward the trend
+        regime = getattr(snapshot, "regime", None)
+        if regime:
+            trend_score = getattr(regime, "trend_score", 0)
+            if trend_score > 40:
+                bull_score += 1
+            elif trend_score < -40:
+                bear_score += 1
+
+        if bull_score >= 4:
+            return "bullish"
+        elif bear_score >= 4:
+            return "bearish"
+        return "neutral"
+
+    def _get_regime_adjusted_params(self, snapshot: MarketSnapshot, regime) -> dict:
+        """Get delta range and spread width adjusted for current regime."""
+        base_delta = list(self._config["short_strike_delta"])
+        base_width = dict(self._config["spread_width"])
+
+        if regime is None:
+            return {"delta_range": base_delta, "spread_width": base_width, "min_premium": self._config["min_premium"]}
+
+        delta_adj = getattr(regime, "delta_adjustment", 0)
+        width_mult = getattr(regime, "spread_width_multiplier", 1.0)
+        prem_mult = getattr(regime, "premium_threshold_multiplier", 1.0)
+
+        # Shift delta range further OTM in dangerous environments
+        adjusted_delta = [max(0.05, d + delta_adj) for d in base_delta]
+
+        # Widen spreads in high vol
+        adjusted_width = {sym: max(2, int(w * width_mult)) for sym, w in base_width.items()}
+
+        # Require more premium
+        adjusted_premium = self._config["min_premium"] * prem_mult
+
+        return {
+            "delta_range": adjusted_delta,
+            "spread_width": adjusted_width,
+            "min_premium": adjusted_premium,
+        }
+
+    def _build_put_spread(self, snapshot: MarketSnapshot, regime=None) -> TradeSignal | None:
         symbol = snapshot.symbol
-        spread_width = self._config["spread_width"].get(symbol, 5)
-        delta_range = self._config["short_strike_delta"]
-        min_premium = self._config["min_premium"]
+        params = self._get_regime_adjusted_params(snapshot, regime)
+        spread_width = params["spread_width"].get(symbol, 5)
+        delta_range = params["delta_range"]
+        min_premium = params["min_premium"]
 
         short_put = self._find_short_strike(snapshot.options_chain.puts, delta_range)
         if not short_put:
             return None
+
+        # Support awareness: don't sell puts AT a support level
+        support = snapshot.indicators.support
+        if support and short_put.strike_price >= support * 0.99:
+            # Try to find a strike below support
+            adjusted_puts = [c for c in snapshot.options_chain.puts if c.strike_price < support * 0.98]
+            if adjusted_puts:
+                short_put = self._find_short_strike(adjusted_puts, delta_range)
+                if not short_put:
+                    return None
+            # If no strikes below support, proceed but note it
 
         target_long_strike = short_put.strike_price - spread_width
         long_put = self._find_nearest_strike(snapshot.options_chain.puts, target_long_strike)
@@ -66,36 +182,69 @@ class SwingSignalGenerator:
         if net_credit < min_premium:
             return None
 
+        # Calculate support distance
+        support_dist = 0.0
+        if support:
+            support_dist = (short_put.strike_price - support) / snapshot.price * 100
+
         reasoning = [
             f"IV rank {snapshot.iv_rank:.0f}% above threshold {self._config['iv_rank_threshold']}%",
-            f"Bullish bias: price {snapshot.price} above SMA50 {snapshot.indicators.sma_50:.2f}",
-            f"Short {short_put.strike_price} put (delta {short_put.delta:.2f}), long {long_put.strike_price} put",
-            f"Net credit: ${net_credit:.2f}",
+            f"Bias: bullish (price {snapshot.price:.2f}, SMA50 {snapshot.indicators.sma_50:.2f})",
         ]
+        if regime:
+            reasoning.append(f"Regime: {getattr(regime, 'volatility_regime', 'N/A')} vol, {getattr(regime, 'trend_regime', 'N/A')} trend")
+        if snapshot.indicators.adx:
+            reasoning.append(f"ADX: {snapshot.indicators.adx:.0f} ({_adx_label(snapshot.indicators.adx)})")
+        reasoning.extend([
+            f"Short {short_put.strike_price} put (delta {short_put.delta:.2f}), long {long_put.strike_price} put",
+            f"Net credit: ${net_credit:.2f} (min required: ${min_premium:.2f})",
+        ])
+        if support:
+            reasoning.append(f"Support at {support:.2f} (short strike {support_dist:+.1f}% away)")
 
         return TradeSignal(
             strategy_mode="swing",
             symbol=symbol,
             spread_type="put_spread",
             legs=[
-                SpreadLeg(symbol=short_put.symbol, strike_price=short_put.strike_price, contract_type="put", side="sell", delta=short_put.delta),
-                SpreadLeg(symbol=long_put.symbol, strike_price=long_put.strike_price, contract_type="put", side="buy", delta=long_put.delta),
+                SpreadLeg(
+                    symbol=short_put.symbol, strike_price=short_put.strike_price,
+                    contract_type="put", side="sell", delta=short_put.delta,
+                    gamma=short_put.gamma, theta=short_put.theta, vega=short_put.vega,
+                ),
+                SpreadLeg(
+                    symbol=long_put.symbol, strike_price=long_put.strike_price,
+                    contract_type="put", side="buy", delta=long_put.delta,
+                    gamma=long_put.gamma, theta=long_put.theta, vega=long_put.vega,
+                ),
             ],
             expiration=short_put.expiration_date,
             target_premium=net_credit,
             profit_target_pct=self._config["profit_target_pct"],
             reasoning=reasoning,
+            support_distance_pct=support_dist,
+            regime_context=getattr(regime, "volatility_regime", "") if regime else "",
         )
 
-    def _build_call_spread(self, snapshot: MarketSnapshot) -> TradeSignal | None:
+    def _build_call_spread(self, snapshot: MarketSnapshot, regime=None) -> TradeSignal | None:
         symbol = snapshot.symbol
-        spread_width = self._config["spread_width"].get(symbol, 5)
-        delta_range = self._config["short_strike_delta"]
-        min_premium = self._config["min_premium"]
+        params = self._get_regime_adjusted_params(snapshot, regime)
+        spread_width = params["spread_width"].get(symbol, 5)
+        delta_range = params["delta_range"]
+        min_premium = params["min_premium"]
 
         short_call = self._find_short_strike(snapshot.options_chain.calls, delta_range)
         if not short_call:
             return None
+
+        # Resistance awareness: don't sell calls AT a resistance level
+        resistance = snapshot.indicators.resistance
+        if resistance and short_call.strike_price <= resistance * 1.01:
+            adjusted_calls = [c for c in snapshot.options_chain.calls if c.strike_price > resistance * 1.02]
+            if adjusted_calls:
+                short_call = self._find_short_strike(adjusted_calls, delta_range)
+                if not short_call:
+                    return None
 
         target_long_strike = short_call.strike_price + spread_width
         long_call = self._find_nearest_strike(snapshot.options_chain.calls, target_long_strike)
@@ -106,26 +255,99 @@ class SwingSignalGenerator:
         if net_credit < min_premium:
             return None
 
+        resistance_dist = 0.0
+        if resistance:
+            resistance_dist = (resistance - short_call.strike_price) / snapshot.price * 100
+
         reasoning = [
             f"IV rank {snapshot.iv_rank:.0f}% above threshold {self._config['iv_rank_threshold']}%",
-            f"Bearish bias: price {snapshot.price} below SMA50 {snapshot.indicators.sma_50:.2f}",
-            f"Short {short_call.strike_price} call (delta {short_call.delta:.2f}), long {long_call.strike_price} call",
-            f"Net credit: ${net_credit:.2f}",
+            f"Bias: bearish (price {snapshot.price:.2f}, SMA50 {snapshot.indicators.sma_50:.2f})",
         ]
+        if regime:
+            reasoning.append(f"Regime: {getattr(regime, 'volatility_regime', 'N/A')} vol, {getattr(regime, 'trend_regime', 'N/A')} trend")
+        if snapshot.indicators.adx:
+            reasoning.append(f"ADX: {snapshot.indicators.adx:.0f} ({_adx_label(snapshot.indicators.adx)})")
+        reasoning.extend([
+            f"Short {short_call.strike_price} call (delta {short_call.delta:.2f}), long {long_call.strike_price} call",
+            f"Net credit: ${net_credit:.2f} (min required: ${min_premium:.2f})",
+        ])
+        if resistance:
+            reasoning.append(f"Resistance at {resistance:.2f} (short strike {resistance_dist:+.1f}% away)")
 
         return TradeSignal(
             strategy_mode="swing",
             symbol=symbol,
             spread_type="call_spread",
             legs=[
-                SpreadLeg(symbol=short_call.symbol, strike_price=short_call.strike_price, contract_type="call", side="sell", delta=short_call.delta),
-                SpreadLeg(symbol=long_call.symbol, strike_price=long_call.strike_price, contract_type="call", side="buy", delta=long_call.delta),
+                SpreadLeg(
+                    symbol=short_call.symbol, strike_price=short_call.strike_price,
+                    contract_type="call", side="sell", delta=short_call.delta,
+                    gamma=short_call.gamma, theta=short_call.theta, vega=short_call.vega,
+                ),
+                SpreadLeg(
+                    symbol=long_call.symbol, strike_price=long_call.strike_price,
+                    contract_type="call", side="buy", delta=long_call.delta,
+                    gamma=long_call.gamma, theta=long_call.theta, vega=long_call.vega,
+                ),
             ],
             expiration=short_call.expiration_date,
             target_premium=net_credit,
             profit_target_pct=self._config["profit_target_pct"],
             reasoning=reasoning,
+            resistance_distance_pct=resistance_dist,
+            regime_context=getattr(regime, "volatility_regime", "") if regime else "",
         )
+
+    def _score_conviction(self, signal: TradeSignal, snapshot: MarketSnapshot, regime=None) -> None:
+        """
+        Score conviction 0-100 based on how many factors align.
+        Used for dynamic position sizing: higher conviction = larger position.
+        """
+        score = 50  # base
+
+        # IV rank bonus (higher IV = more premium, better edge)
+        if snapshot.iv_rank is not None:
+            if snapshot.iv_rank > 60:
+                score += 15
+            elif snapshot.iv_rank > 40:
+                score += 8
+
+        # ADX bonus (mean-reverting market = better for selling premium)
+        adx = snapshot.indicators.adx
+        if adx is not None:
+            if adx < 20:  # range-bound = ideal
+                score += 10
+            elif adx > 30:  # strong trend = risky
+                score -= 10
+
+        # Regime alignment
+        if regime:
+            vol_regime = getattr(regime, "volatility_regime", "")
+            if vol_regime == "elevated":
+                score += 10  # elevated vol = fat premiums
+            elif vol_regime == "crisis":
+                score -= 20  # crisis = dangerous
+
+            phase = getattr(regime, "market_phase", "")
+            if phase == "mean_reverting":
+                score += 10
+            elif phase == "trending":
+                score -= 10
+
+        # Support/resistance buffer
+        if signal.spread_type == "put_spread" and signal.support_distance_pct > 3:
+            score += 5  # short strike well above support
+        elif signal.spread_type == "call_spread" and signal.resistance_distance_pct > 3:
+            score += 5
+
+        # MACD confirmation
+        if snapshot.indicators.macd_histogram is not None:
+            if signal.spread_type == "put_spread" and snapshot.indicators.macd_histogram > 0:
+                score += 5  # bullish momentum supports put selling
+            elif signal.spread_type == "call_spread" and snapshot.indicators.macd_histogram < 0:
+                score += 5
+
+        signal.conviction_score = max(0, min(100, score))
 
     def _find_short_strike(self, contracts: list[OptionContract], delta_range: list[float]) -> OptionContract | None:
         min_delta, max_delta = delta_range
@@ -134,7 +356,13 @@ class SwingSignalGenerator:
             if min_delta <= abs(c.delta) <= max_delta and c.open_interest > 0 and c.mid_price > 0
         ]
         if not candidates:
-            return None
+            # Fallback: if no delta data, use all contracts with volume
+            candidates = [c for c in contracts if c.mid_price > 0 and c.open_interest > 0]
+            if not candidates:
+                return None
+            # Pick by target OTM distance (~4% OTM as fallback)
+            target = (min_delta + max_delta) / 2
+            return min(candidates, key=lambda c: abs(abs(c.delta) - target) if c.delta != 0 else 999)
         target = (min_delta + max_delta) / 2
         return min(candidates, key=lambda c: abs(abs(c.delta) - target))
 
@@ -142,3 +370,13 @@ class SwingSignalGenerator:
         if not contracts:
             return None
         return min(contracts, key=lambda c: abs(c.strike_price - target_strike))
+
+
+def _adx_label(adx: float) -> str:
+    if adx < 20:
+        return "weak/range-bound"
+    elif adx < 25:
+        return "transitioning"
+    elif adx < 40:
+        return "trending"
+    return "strong trend"

@@ -36,6 +36,16 @@ class ExhaustionConfig:
 
 
 @dataclass
+class DrawdownConfig:
+    loss_streak_reduce: int = 3
+    loss_streak_halt: int = 5
+    cooldown_minutes: int = 60
+    drawdown_reduce_pct: float = 5.0
+    drawdown_severe_pct: float = 10.0
+    drawdown_halt_pct: float = 15.0
+
+
+@dataclass
 class RiskConfig:
     max_concurrent_spreads: int
     max_risk_per_trade_pct: int
@@ -47,6 +57,24 @@ class RiskConfig:
     daily_income_target: int
     max_same_direction_per_symbol: int
     max_portfolio_delta_per_symbol: float
+    # Enhanced risk settings
+    max_correlated_same_direction: int = 4
+    max_portfolio_vega: float = 500.0
+    max_contracts_per_trade: int = 10
+    drawdown: DrawdownConfig = field(default_factory=DrawdownConfig)
+
+
+@dataclass
+class RegimeConfig:
+    enabled: bool = True
+    vix_symbol: str = "VIX"   # VIX proxy for Alpaca (uses VIXY or VIX bars)
+    vix_low: float = 14.0
+    vix_elevated: float = 20.0
+    vix_crisis: float = 30.0
+    adx_weak: float = 20.0
+    adx_strong: float = 25.0
+    halt_on_crisis_backwardation: bool = True
+    halt_on_crisis_trending: bool = True
 
 
 @dataclass
@@ -79,6 +107,7 @@ class AppConfig:
     execution: ExecutionConfig
     schedule: ScheduleConfig
     notifications: NotificationsConfig
+    regime: RegimeConfig = field(default_factory=RegimeConfig)
 
     # From environment variables
     alpaca_api_key: str = ""
@@ -108,6 +137,13 @@ def _deep_merge(base: dict, override: dict) -> dict:
     return result
 
 
+def _build_risk_config(raw_risk: dict) -> RiskConfig:
+    """Build RiskConfig, extracting nested drawdown config."""
+    dd_raw = raw_risk.pop("drawdown", {})
+    dd = DrawdownConfig(**dd_raw) if dd_raw else DrawdownConfig()
+    return RiskConfig(**raw_risk, drawdown=dd)
+
+
 def load_config(config_path: str = "config/config.yaml", db=None) -> AppConfig:
     env_path = Path(config_path).parent / ".env"
     if env_path.exists():
@@ -124,14 +160,23 @@ def load_config(config_path: str = "config/config.yaml", db=None) -> AppConfig:
         else:
             db.seed_settings(raw)
 
+    # Build regime config with defaults for missing fields
+    regime_raw = raw.get("regime", {})
+    regime = RegimeConfig(**{k: v for k, v in regime_raw.items() if k in RegimeConfig.__dataclass_fields__})
+
+    # Build risk config with nested drawdown
+    risk_raw = dict(raw["risk"])
+    risk = _build_risk_config(risk_raw)
+
     return AppConfig(
         symbols=raw["symbols"],
         swing=SwingConfig(**raw["swing"]),
         exhaustion=ExhaustionConfig(**raw["exhaustion"]),
-        risk=RiskConfig(**raw["risk"]),
+        risk=risk,
         execution=ExecutionConfig(**raw["execution"]),
         schedule=ScheduleConfig(**raw["schedule"]),
         notifications=NotificationsConfig(**raw["notifications"]),
+        regime=regime,
         alpaca_api_key=os.getenv("ALPACA_API_KEY", ""),
         alpaca_api_secret=os.getenv("ALPACA_API_SECRET", ""),
         alpaca_paper=os.getenv("ALPACA_PAPER", "true").lower() == "true",

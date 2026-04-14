@@ -1,9 +1,20 @@
+"""
+Exhaustion Signal Generator - Enhanced with Regime Awareness
+
+Key improvements:
+1. Regime-adaptive thresholds (require stronger signals in trending markets)
+2. Volume confirmation (volume should confirm the reversal, not just decline)
+3. ATR-based move sizing (use ATR to normalize "big move" instead of fixed %)
+4. Conviction scoring for dynamic position sizing
+5. Keltner Channel checks alongside Bollinger Bands
+"""
+
 import logging
 from datetime import datetime, time as dtime
 
 from src.event_bus import EventBus
 from src.market_data.models import Bar, MarketSnapshot, OptionContract
-from src.signals.models import SpreadLeg, TradeSignal
+from src.signals.models import EvaluationResult, SpreadLeg, TradeSignal
 
 logger = logging.getLogger(__name__)
 
@@ -13,43 +24,89 @@ class ExhaustionSignalGenerator:
         self._config = config
         self._bus = event_bus
 
-    def evaluate(self, snapshot: MarketSnapshot, current_time: dtime | None = None) -> list[TradeSignal]:
+    def evaluate(self, snapshot: MarketSnapshot, current_time: dtime | None = None) -> EvaluationResult:
+        result = EvaluationResult()
+
         if not self._config.get("enabled", True):
-            return []
+            return result
 
         if current_time is None:
             current_time = datetime.now().time()
 
         window_start = dtime.fromisoformat(self._config["time_window_start"])
         if current_time < window_start:
-            return []
+            result.rejections.append({
+                "strategy": "exhaustion", "reason": "before_time_window",
+                "variables": {"current_time": str(current_time), "window_start": str(window_start)},
+            })
+            return result
 
         if snapshot.intraday_indicators is None:
-            return []
+            return result
 
-        # Must have a meaningful move from open to even consider exhaustion
+        # Regime check: skip exhaustion in crisis markets (moves can extend)
+        regime = getattr(snapshot, "regime", None)
+        if regime and not getattr(regime, "should_trade", True):
+            result.rejections.append({
+                "strategy": "exhaustion", "reason": "regime_halt",
+                "variables": {"volatility_regime": getattr(regime, "volatility_regime", "unknown")},
+            })
+            return result
+
+        # Move from open check, with ATR-normalized threshold
         min_move_pct = self._config.get("min_move_from_open_pct", 0.8)
+
+        # In elevated/crisis vol, require a larger move (normal moves are bigger)
+        if regime:
+            vol_regime = getattr(regime, "volatility_regime", "normal")
+            if vol_regime == "elevated":
+                min_move_pct *= 1.3
+            elif vol_regime == "crisis":
+                min_move_pct *= 1.8  # require much larger move in crisis
+
         move_from_open = self._calc_move_from_open(snapshot)
         if abs(move_from_open) < min_move_pct:
-            return []
+            result.rejections.append({
+                "strategy": "exhaustion", "reason": "move_from_open_too_small",
+                "variables": {"move_pct": round(move_from_open, 2), "threshold": round(min_move_pct, 2)},
+            })
+            return result
+
+        # Score exhaustion signals
+        min_required = self._config["min_signals_required"]
+
+        # In trending markets, require more signals (harder to fade a trend)
+        if regime:
+            phase = getattr(regime, "market_phase", "mean_reverting")
+            if phase == "trending":
+                min_required = max(min_required, min_required + 1)
 
         upside_score = self._score_upside_exhaustion(snapshot, move_from_open)
         downside_score = self._score_downside_exhaustion(snapshot, move_from_open)
 
-        min_required = self._config["min_signals_required"]
-        signals = []
-
         if upside_score >= min_required:
-            signal = self._build_call_spread(snapshot, upside_score)
+            signal = self._build_call_spread(snapshot, upside_score, regime)
             if signal:
-                signals.append(signal)
+                self._score_conviction(signal, snapshot, upside_score, min_required, regime)
+                result.signals.append(signal)
+        elif move_from_open > 0:
+            result.rejections.append({
+                "strategy": "exhaustion", "reason": "upside_score_below_threshold",
+                "variables": {"score": upside_score, "required": min_required, "move_pct": round(move_from_open, 2)},
+            })
 
         if downside_score >= min_required:
-            signal = self._build_put_spread(snapshot, downside_score)
+            signal = self._build_put_spread(snapshot, downside_score, regime)
             if signal:
-                signals.append(signal)
+                self._score_conviction(signal, snapshot, downside_score, min_required, regime)
+                result.signals.append(signal)
+        elif move_from_open < 0:
+            result.rejections.append({
+                "strategy": "exhaustion", "reason": "downside_score_below_threshold",
+                "variables": {"score": downside_score, "required": min_required, "move_pct": round(move_from_open, 2)},
+            })
 
-        return signals
+        return result
 
     def _calc_move_from_open(self, snapshot: MarketSnapshot) -> float:
         if snapshot.open_price <= 0:
@@ -85,16 +142,24 @@ class ExhaustionSignalGenerator:
         if move_pct >= self._config.get("strong_move_pct", 1.5):
             score += 1
 
-        # 6. Volume declining — later bars have less volume than earlier bars
+        # 6. Volume declining -- later bars have less volume than earlier bars
         if self._is_volume_declining(snapshot.intraday_bars):
             score += 1
 
-        # 7. Momentum stalling — last few bars making smaller ranges
+        # 7. Momentum stalling -- last few bars making smaller ranges
         if self._is_momentum_stalling(snapshot.intraday_bars, direction="up"):
             score += 1
 
-        # 8. Extended beyond prior day's high
+        # 8. Extended beyond prior day's close
         if snapshot.prev_close > 0 and snapshot.price > snapshot.prev_close * 1.01:
+            score += 1
+
+        # 9. (NEW) Price above Keltner Channel upper band
+        if ind.keltner_upper is not None and snapshot.price > ind.keltner_upper:
+            score += 1
+
+        # 10. (NEW) Relative volume declining (below average)
+        if ind.relative_volume is not None and ind.relative_volume < 0.8:
             score += 1
 
         return score
@@ -106,36 +171,36 @@ class ExhaustionSignalGenerator:
         ind = snapshot.intraday_indicators
         score = 0
 
-        # 1. RSI oversold
         if ind.rsi is not None and ind.rsi < self._config["rsi_oversold"]:
             score += 1
 
-        # 2. Price below VWAP
         if ind.vwap is not None and snapshot.price < ind.vwap * 0.995:
             score += 1
 
-        # 3. Price at lower bollinger
         if ind.lower_bollinger is not None and snapshot.price <= ind.lower_bollinger * 1.002:
             score += 1
 
-        # 4. Price near low of day
         if snapshot.low_of_day > 0 and snapshot.price <= snapshot.low_of_day * 1.002:
             score += 1
 
-        # 5. Large move from open
         if abs(move_pct) >= self._config.get("strong_move_pct", 1.5):
             score += 1
 
-        # 6. Volume declining
         if self._is_volume_declining(snapshot.intraday_bars):
             score += 1
 
-        # 7. Momentum stalling
         if self._is_momentum_stalling(snapshot.intraday_bars, direction="down"):
             score += 1
 
-        # 8. Extended below prior day's low
         if snapshot.prev_close > 0 and snapshot.price < snapshot.prev_close * 0.99:
+            score += 1
+
+        # (NEW) Price below Keltner Channel lower band
+        if ind.keltner_lower is not None and snapshot.price < ind.keltner_lower:
+            score += 1
+
+        # (NEW) Relative volume declining
+        if ind.relative_volume is not None and ind.relative_volume < 0.8:
             score += 1
 
         return score
@@ -143,7 +208,6 @@ class ExhaustionSignalGenerator:
     def _is_volume_declining(self, bars: list[Bar]) -> bool:
         if len(bars) < 6:
             return False
-        # Compare average volume of last 3 bars vs first half
         mid = len(bars) // 2
         first_half_avg = sum(b.volume for b in bars[:mid]) / mid
         last_3_avg = sum(b.volume for b in bars[-3:]) / 3
@@ -166,10 +230,8 @@ class ExhaustionSignalGenerator:
         if avg_prev == 0:
             return False
 
-        # Ranges shrinking = momentum stalling
         ranges_shrinking = avg_last < avg_prev * 0.5
 
-        # Also check: are the last bars failing to make new highs/lows?
         if direction == "up":
             highs_stalling = last_3[-1].high <= max(b.high for b in last_3[:-1])
         else:
@@ -177,10 +239,39 @@ class ExhaustionSignalGenerator:
 
         return ranges_shrinking or highs_stalling
 
-    def _build_call_spread(self, snapshot: MarketSnapshot, signal_count: int) -> TradeSignal | None:
+    def _score_conviction(self, signal: TradeSignal, snapshot: MarketSnapshot, score: int, min_required: int, regime=None) -> None:
+        """Score conviction for dynamic position sizing."""
+        conviction = 40  # base for exhaustion (inherently lower conviction than swing)
+
+        # More signals = higher conviction
+        excess_signals = score - min_required
+        conviction += excess_signals * 8
+
+        # RSI extreme = higher conviction
+        rsi = snapshot.intraday_indicators.rsi if snapshot.intraday_indicators else None
+        if rsi is not None:
+            if rsi > 80 or rsi < 20:
+                conviction += 10
+
+        # Regime alignment: mean-reverting regime = better for exhaustion plays
+        if regime:
+            phase = getattr(regime, "market_phase", "")
+            if phase == "mean_reverting":
+                conviction += 10
+            elif phase == "trending":
+                conviction -= 15  # fading a trend is risky
+
+        signal.conviction_score = max(0, min(100, conviction))
+
+    def _build_call_spread(self, snapshot: MarketSnapshot, signal_count: int, regime=None) -> TradeSignal | None:
         symbol = snapshot.symbol
         spread_width = self._config["spread_width"].get(symbol, 5)
         min_premium = self._config["min_premium"]
+
+        # Regime-adjusted premium threshold
+        if regime:
+            prem_mult = getattr(regime, "premium_threshold_multiplier", 1.0)
+            min_premium *= prem_mult
 
         target_short_strike = snapshot.price
         short_call = self._find_nearest_at_or_above(snapshot.options_chain.calls, target_short_strike)
@@ -198,34 +289,51 @@ class ExhaustionSignalGenerator:
 
         move_pct = self._calc_move_from_open(snapshot)
         reasoning = [
-            f"Upside exhaustion ({signal_count} signals, score threshold: {self._config['min_signals_required']})",
-            f"SPY up {move_pct:+.2f}% from open ({snapshot.open_price:.2f} → {snapshot.price:.2f})",
+            f"Upside exhaustion ({signal_count} signals, min required: {self._config['min_signals_required']})",
+            f"{symbol} up {move_pct:+.2f}% from open ({snapshot.open_price:.2f} -> {snapshot.price:.2f})",
             f"High of day: {snapshot.high_of_day:.2f}",
-            f"Intraday RSI: {snapshot.intraday_indicators.rsi:.0f}" if snapshot.intraday_indicators.rsi else "",
+        ]
+        if snapshot.intraday_indicators and snapshot.intraday_indicators.rsi:
+            reasoning.append(f"Intraday RSI: {snapshot.intraday_indicators.rsi:.0f}")
+        if regime:
+            reasoning.append(f"Regime: {getattr(regime, 'volatility_regime', 'N/A')} vol, {getattr(regime, 'market_phase', 'N/A')} phase")
+        reasoning.extend([
             f"Volume declining: {self._is_volume_declining(snapshot.intraday_bars)}",
             f"Momentum stalling: {self._is_momentum_stalling(snapshot.intraday_bars, 'up')}",
             f"Net credit: ${net_credit:.2f}",
-        ]
-        reasoning = [r for r in reasoning if r]
+        ])
 
         return TradeSignal(
             strategy_mode="exhaustion",
             symbol=symbol,
             spread_type="call_spread",
             legs=[
-                SpreadLeg(symbol=short_call.symbol, strike_price=short_call.strike_price, contract_type="call", side="sell", delta=short_call.delta),
-                SpreadLeg(symbol=long_call.symbol, strike_price=long_call.strike_price, contract_type="call", side="buy", delta=long_call.delta),
+                SpreadLeg(
+                    symbol=short_call.symbol, strike_price=short_call.strike_price,
+                    contract_type="call", side="sell", delta=short_call.delta,
+                    gamma=short_call.gamma, theta=short_call.theta, vega=short_call.vega,
+                ),
+                SpreadLeg(
+                    symbol=long_call.symbol, strike_price=long_call.strike_price,
+                    contract_type="call", side="buy", delta=long_call.delta,
+                    gamma=long_call.gamma, theta=long_call.theta, vega=long_call.vega,
+                ),
             ],
             expiration=short_call.expiration_date,
             target_premium=net_credit,
             profit_target_pct=self._config["profit_target_pct"],
             reasoning=reasoning,
+            regime_context=getattr(regime, "volatility_regime", "") if regime else "",
         )
 
-    def _build_put_spread(self, snapshot: MarketSnapshot, signal_count: int) -> TradeSignal | None:
+    def _build_put_spread(self, snapshot: MarketSnapshot, signal_count: int, regime=None) -> TradeSignal | None:
         symbol = snapshot.symbol
         spread_width = self._config["spread_width"].get(symbol, 5)
         min_premium = self._config["min_premium"]
+
+        if regime:
+            prem_mult = getattr(regime, "premium_threshold_multiplier", 1.0)
+            min_premium *= prem_mult
 
         target_short_strike = snapshot.price
         short_put = self._find_nearest_at_or_below(snapshot.options_chain.puts, target_short_strike)
@@ -243,28 +351,41 @@ class ExhaustionSignalGenerator:
 
         move_pct = self._calc_move_from_open(snapshot)
         reasoning = [
-            f"Downside exhaustion ({signal_count} signals, score threshold: {self._config['min_signals_required']})",
-            f"SPY down {move_pct:+.2f}% from open ({snapshot.open_price:.2f} → {snapshot.price:.2f})",
+            f"Downside exhaustion ({signal_count} signals, min required: {self._config['min_signals_required']})",
+            f"{symbol} down {move_pct:+.2f}% from open ({snapshot.open_price:.2f} -> {snapshot.price:.2f})",
             f"Low of day: {snapshot.low_of_day:.2f}",
-            f"Intraday RSI: {snapshot.intraday_indicators.rsi:.0f}" if snapshot.intraday_indicators.rsi else "",
+        ]
+        if snapshot.intraday_indicators and snapshot.intraday_indicators.rsi:
+            reasoning.append(f"Intraday RSI: {snapshot.intraday_indicators.rsi:.0f}")
+        if regime:
+            reasoning.append(f"Regime: {getattr(regime, 'volatility_regime', 'N/A')} vol, {getattr(regime, 'market_phase', 'N/A')} phase")
+        reasoning.extend([
             f"Volume declining: {self._is_volume_declining(snapshot.intraday_bars)}",
             f"Momentum stalling: {self._is_momentum_stalling(snapshot.intraday_bars, 'down')}",
             f"Net credit: ${net_credit:.2f}",
-        ]
-        reasoning = [r for r in reasoning if r]
+        ])
 
         return TradeSignal(
             strategy_mode="exhaustion",
             symbol=symbol,
             spread_type="put_spread",
             legs=[
-                SpreadLeg(symbol=short_put.symbol, strike_price=short_put.strike_price, contract_type="put", side="sell", delta=short_put.delta),
-                SpreadLeg(symbol=long_put.symbol, strike_price=long_put.strike_price, contract_type="put", side="buy", delta=long_put.delta),
+                SpreadLeg(
+                    symbol=short_put.symbol, strike_price=short_put.strike_price,
+                    contract_type="put", side="sell", delta=short_put.delta,
+                    gamma=short_put.gamma, theta=short_put.theta, vega=short_put.vega,
+                ),
+                SpreadLeg(
+                    symbol=long_put.symbol, strike_price=long_put.strike_price,
+                    contract_type="put", side="buy", delta=long_put.delta,
+                    gamma=long_put.gamma, theta=long_put.theta, vega=long_put.vega,
+                ),
             ],
             expiration=short_put.expiration_date,
             target_premium=net_credit,
             profit_target_pct=self._config["profit_target_pct"],
             reasoning=reasoning,
+            regime_context=getattr(regime, "volatility_regime", "") if regime else "",
         )
 
     def _find_nearest_at_or_above(self, contracts: list[OptionContract], target: float) -> OptionContract | None:

@@ -29,8 +29,9 @@ class OrderExecutor:
             for leg in signal.legs
         ]
 
+        quantity = getattr(signal, "quantity", 1) or 1
         order_request = LimitOrderRequest(
-            qty=1,
+            qty=quantity,
             time_in_force=TimeInForce.DAY,
             order_class=OrderClass.MLEG,
             limit_price=round(signal.target_premium, 2),

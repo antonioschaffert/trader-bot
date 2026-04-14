@@ -2,7 +2,9 @@ import { useState, useCallback } from "react";
 import { api, hasCredentials } from "@/lib/api";
 import { usePolling } from "@/hooks/usePolling";
 import { StatusBar } from "@/components/StatusBar";
+import { MarketRegime } from "@/components/MarketRegime";
 import { MarketOverview } from "@/components/MarketOverview";
+import { PerformancePanel } from "@/components/PerformancePanel";
 import { RejectionTable } from "@/components/RejectionTable";
 import { TradeHistory } from "@/components/TradeHistory";
 import { SettingsPanel } from "@/components/SettingsPanel";
@@ -19,6 +21,8 @@ function Dashboard() {
   const { data: settings, refresh: refreshSettings } = usePolling(
     api.getSettings,
   );
+  const { data: analytics } = usePolling(api.getAnalytics);
+  const { data: greeks } = usePolling(api.getPortfolioGreeks);
 
   const rejFetcher = useCallback(
     () => api.getRejections(50, rejSymbol, rejStrategy),
@@ -39,13 +43,18 @@ function Dashboard() {
         onOpenSettings={() => setSettingsOpen(true)}
       />
       <main className="mx-auto max-w-7xl space-y-8 px-6 py-6">
+        <MarketRegime
+          regime={status?.regime ?? null}
+          drawdown={status?.drawdown ?? null}
+        />
         <MarketOverview market={market} />
+        <PerformancePanel analytics={analytics} greeks={greeks} />
+        <TradeHistory data={trades} />
         <RejectionTable
           data={rejections}
           onFilterChange={handleFilterChange}
           symbols={status?.symbols ?? []}
         />
-        <TradeHistory data={trades} />
       </main>
       <SettingsPanel
         open={settingsOpen}

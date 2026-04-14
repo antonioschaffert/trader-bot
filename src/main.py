@@ -59,6 +59,8 @@ def main():
         "rsi_overbought": config.exhaustion.rsi_overbought, "rsi_oversold": config.exhaustion.rsi_oversold,
         "intraday_timeframe": config.exhaustion.intraday_timeframe,
         "min_signals_required": config.exhaustion.min_signals_required,
+        "min_move_from_open_pct": config.exhaustion.min_move_from_open_pct,
+        "strong_move_pct": config.exhaustion.strong_move_pct,
         "close_by_eod": config.exhaustion.close_by_eod,
     }
     exhaustion_gen = ExhaustionSignalGenerator(exhaustion_config, event_bus)
@@ -72,6 +74,17 @@ def main():
         "daily_loss_limit": config.risk.daily_loss_limit, "daily_income_target": config.risk.daily_income_target,
         "max_same_direction_per_symbol": config.risk.max_same_direction_per_symbol,
         "max_portfolio_delta_per_symbol": config.risk.max_portfolio_delta_per_symbol,
+        "max_correlated_same_direction": config.risk.max_correlated_same_direction,
+        "max_portfolio_vega": config.risk.max_portfolio_vega,
+        "max_contracts_per_trade": config.risk.max_contracts_per_trade,
+        "drawdown": {
+            "loss_streak_reduce": config.risk.drawdown.loss_streak_reduce,
+            "loss_streak_halt": config.risk.drawdown.loss_streak_halt,
+            "cooldown_minutes": config.risk.drawdown.cooldown_minutes,
+            "drawdown_reduce_pct": config.risk.drawdown.drawdown_reduce_pct,
+            "drawdown_severe_pct": config.risk.drawdown.drawdown_severe_pct,
+            "drawdown_halt_pct": config.risk.drawdown.drawdown_halt_pct,
+        },
     }
     risk_manager = RiskManager(risk_config, event_bus)
 
@@ -99,12 +112,15 @@ def main():
         option_client=option_client, db=db,
     )
 
-    logger.info("Auto-Trader starting...")
+    logger.info("Auto-Trader starting (Enhanced v2)...")
     logger.info(f"Symbols: {config.symbols}")
     logger.info(f"Paper trading: {config.alpaca_paper}")
     logger.info(f"Swing DTE: {config.swing.target_dte}")
     logger.info(f"Exhaustion enabled: {config.exhaustion.enabled}")
     logger.info(f"Daily target: ${config.risk.daily_income_target}")
+    logger.info(f"Regime detection: {config.regime.enabled}")
+    logger.info(f"Drawdown halt at: {config.risk.drawdown.drawdown_halt_pct}%")
+    logger.info(f"Max contracts/trade: {config.risk.max_contracts_per_trade}")
 
     try:
         scheduler.start()

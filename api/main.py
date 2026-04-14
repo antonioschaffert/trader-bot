@@ -6,6 +6,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.security import HTTPBasic, HTTPBasicCredentials
 
 from api.routes import status as status_route, market, rejections, trades, iv_history, settings
+from api.routes import regime, analytics
 
 app = FastAPI(title="Auto-Trader Dashboard API")
 
@@ -20,7 +21,7 @@ app.add_middleware(
     allow_credentials=True,
 )
 
-# Basic auth — set API_USERNAME and API_PASSWORD env vars to enable
+# Basic auth -- set API_USERNAME and API_PASSWORD env vars to enable
 _auth_user = os.environ.get("API_USERNAME", "")
 _auth_pass = os.environ.get("API_PASSWORD", "")
 security = HTTPBasic(auto_error=False)
@@ -43,3 +44,5 @@ app.include_router(rejections.router, prefix="/api", dependencies=[Depends(check
 app.include_router(trades.router, prefix="/api", dependencies=[Depends(check_auth)])
 app.include_router(iv_history.router, prefix="/api", dependencies=[Depends(check_auth)])
 app.include_router(settings.router, prefix="/api", dependencies=[Depends(check_auth)])
+app.include_router(regime.router, prefix="/api", dependencies=[Depends(check_auth)])
+app.include_router(analytics.router, prefix="/api", dependencies=[Depends(check_auth)])

@@ -34,6 +34,14 @@ function biasVariant(
   return "secondary";
 }
 
+function adxLabel(adx: number | null): string {
+  if (adx == null) return "N/A";
+  if (adx < 20) return `${adx.toFixed(0)} (Range)`;
+  if (adx < 25) return `${adx.toFixed(0)} (Trans.)`;
+  if (adx < 40) return `${adx.toFixed(0)} (Trend)`;
+  return `${adx.toFixed(0)} (Strong)`;
+}
+
 export function MarketOverview({ market }: Props) {
   if (!market) {
     return (
@@ -59,7 +67,14 @@ export function MarketOverview({ market }: Props) {
               <CardHeader>
                 <CardTitle className="flex items-center justify-between">
                   <span>{m.symbol}</span>
-                  <Badge variant={biasVariant(bias)}>{bias}</Badge>
+                  <div className="flex gap-1">
+                    <Badge variant={biasVariant(bias)}>{bias}</Badge>
+                    {m.regime && (
+                      <Badge variant="outline" className="text-[10px]">
+                        {m.regime.phase === "mean_reverting" ? "RNG" : m.regime.phase === "trending" ? "TRD" : "TRS"}
+                      </Badge>
+                    )}
+                  </div>
                 </CardTitle>
               </CardHeader>
               <CardContent>
@@ -78,6 +93,34 @@ export function MarketOverview({ market }: Props) {
                     <span className="text-muted-foreground">IV Rank</span>
                     <p className="font-medium">
                       {m.iv_rank != null ? `${m.iv_rank.toFixed(0)}%` : "N/A"}
+                    </p>
+                  </div>
+                  <div>
+                    <span className="text-muted-foreground">IV %ile</span>
+                    <p className="font-medium">
+                      {m.iv_percentile != null ? `${m.iv_percentile.toFixed(0)}%` : "N/A"}
+                    </p>
+                  </div>
+                  <div>
+                    <span className="text-muted-foreground">ADX</span>
+                    <p className="font-medium">{adxLabel(m.adx)}</p>
+                  </div>
+                  <div>
+                    <span className="text-muted-foreground">ATR</span>
+                    <p className="font-medium">
+                      {m.atr != null ? `$${m.atr.toFixed(2)}` : "N/A"}
+                    </p>
+                  </div>
+                  <div>
+                    <span className="text-muted-foreground">Support</span>
+                    <p className="font-medium text-green-500">
+                      {m.support != null ? `$${m.support.toFixed(2)}` : "N/A"}
+                    </p>
+                  </div>
+                  <div>
+                    <span className="text-muted-foreground">Resistance</span>
+                    <p className="font-medium text-red-500">
+                      {m.resistance != null ? `$${m.resistance.toFixed(2)}` : "N/A"}
                     </p>
                   </div>
                   <div>

@@ -24,12 +24,16 @@ def get_status():
     heartbeat = db["heartbeat"].find_one({"_id": "bot"})
     bot_alive = False
     market_hours = False
+    regime = None
+    drawdown = None
     if heartbeat and "timestamp" in heartbeat:
         hb_ts = heartbeat["timestamp"]
         if hb_ts.tzinfo is None:
             hb_ts = hb_ts.replace(tzinfo=timezone.utc)
         bot_alive = (datetime.now(timezone.utc) - hb_ts) < timedelta(minutes=2)
         market_hours = heartbeat.get("market_hours", False)
+        regime = heartbeat.get("regime")
+        drawdown = heartbeat.get("drawdown")
 
     paper_mode = os.getenv("ALPACA_PAPER", "true").lower() == "true"
     settings_doc = db["settings"].find_one({"_id": "config"})
@@ -42,4 +46,6 @@ def get_status():
         "paper_mode": paper_mode,
         "last_scan_time": last_scan_time,
         "symbols": symbols,
+        "regime": regime,
+        "drawdown": drawdown,
     }

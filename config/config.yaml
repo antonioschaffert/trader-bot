@@ -39,6 +39,28 @@ risk:
   daily_income_target: 500
   max_same_direction_per_symbol: 3
   max_portfolio_delta_per_symbol: 0.30
+  # Enhanced risk settings
+  max_correlated_same_direction: 4   # max same-direction across correlated assets (SPY+QQQ)
+  max_portfolio_vega: 500            # max vega exposure ($ impact per 1pt IV move)
+  max_contracts_per_trade: 10        # cap on dynamic position sizing
+  drawdown:
+    loss_streak_reduce: 3            # reduce size after N consecutive losses
+    loss_streak_halt: 5              # stop trading after N consecutive losses
+    cooldown_minutes: 60             # cooldown duration after streak halt
+    drawdown_reduce_pct: 5.0         # start reducing size at this drawdown %
+    drawdown_severe_pct: 10.0        # severe size reduction at this drawdown %
+    drawdown_halt_pct: 15.0          # halt trading at this drawdown %
+
+regime:
+  enabled: true
+  vix_symbol: "VIXY"                 # VIX proxy ETF (Alpaca doesn't have VIX directly)
+  vix_low: 14.0                      # below = complacency, low premiums
+  vix_elevated: 20.0                 # above = fear rising, good for premium selling
+  vix_crisis: 30.0                   # above = panic, widen strikes or sit out
+  adx_weak: 20.0                     # below = range-bound (ideal for selling premium)
+  adx_strong: 25.0                   # above = trending (be careful selling premium)
+  halt_on_crisis_backwardation: true  # stop trading in VIX crisis + backwardation
+  halt_on_crisis_trending: true       # stop trading in VIX crisis + trending market
 
 execution:
   price_adjustment_interval: 30
@@ -52,5 +74,5 @@ schedule:
 notifications:
   sms_enabled: true
   email_enabled: true
-  sms_events: ["fill", "stop_loss", "roll", "circuit_breaker", "error"]
+  sms_events: ["fill", "stop_loss", "roll", "circuit_breaker", "error", "regime_change", "drawdown_alert"]
   email_events: ["daily_summary", "weekly_recap"]

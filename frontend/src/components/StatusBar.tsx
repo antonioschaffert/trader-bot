@@ -14,6 +14,8 @@ export function StatusBar({ status, market, onOpenSettings }: Props) {
   const marketHours = status?.market_hours ?? false;
   const paperMode = status?.paper_mode ?? true;
   const lastScan = formatTimeET(status?.last_scan_time);
+  const regime = status?.regime;
+  const drawdown = status?.drawdown;
 
   const spyPrice = market?.find((m) => m.symbol === "SPY")?.price;
   const qqqPrice = market?.find((m) => m.symbol === "QQQ")?.price;
@@ -31,6 +33,9 @@ export function StatusBar({ status, market, onOpenSettings }: Props) {
       ? "bg-green-500 animate-pulse"
       : "bg-yellow-500";
 
+  // Regime-based status color
+  const shouldTrade = regime?.should_trade ?? true;
+
   return (
     <header className="sticky top-0 z-40 flex items-center justify-between border-b bg-background/95 px-6 py-3 backdrop-blur supports-[backdrop-filter]:bg-background/60">
       <div className="flex items-center gap-4">
@@ -46,6 +51,33 @@ export function StatusBar({ status, market, onOpenSettings }: Props) {
         <Badge variant={paperMode ? "secondary" : "destructive"}>
           {paperMode ? "Paper" : "Live"}
         </Badge>
+
+        {/* Regime badge */}
+        {regime && (
+          <Badge
+            variant={
+              regime.volatility_regime === "crisis"
+                ? "destructive"
+                : regime.volatility_regime === "elevated"
+                  ? "outline"
+                  : "secondary"
+            }
+          >
+            VIX {regime.vix_current.toFixed(0)}
+          </Badge>
+        )}
+
+        {/* Trading halted warning */}
+        {!shouldTrade && (
+          <Badge variant="destructive">HALTED</Badge>
+        )}
+
+        {/* Drawdown indicator */}
+        {drawdown && drawdown.drawdown_pct > 3 && (
+          <Badge variant={drawdown.drawdown_pct > 10 ? "destructive" : "outline"}>
+            DD {drawdown.drawdown_pct.toFixed(1)}%
+          </Badge>
+        )}
 
         {/* Last scan */}
         <span className="text-sm text-muted-foreground">
