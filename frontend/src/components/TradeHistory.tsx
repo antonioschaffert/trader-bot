@@ -35,17 +35,6 @@ function field(row: Record<string, unknown>, key: string): string {
   return String(v);
 }
 
-function actionBadge(action: string) {
-  const config: Record<string, { label: string; variant: "default" | "secondary" | "destructive" | "outline" }> = {
-    open: { label: "OPEN", variant: "default" },
-    close: { label: "CLOSE", variant: "secondary" },
-    wheel_open: { label: "WHEEL OPEN", variant: "default" },
-    wheel_close: { label: "WHEEL CLOSE", variant: "secondary" },
-  };
-  const c = config[action] ?? { label: action.toUpperCase(), variant: "outline" as const };
-  return <Badge variant={c.variant} className="text-[10px] px-1.5">{c.label}</Badge>;
-}
-
 function formatTime(iso: string): string {
   try {
     const d = new Date(iso);
@@ -58,58 +47,89 @@ function formatTime(iso: string): string {
   }
 }
 
+/** Determine if this is a sell/open action (selling premium) or a buy/close action */
+function isOpenAction(action: string): boolean {
+  return action === "open" || action === "wheel_open";
+}
+
 function ActivityStream({ logs }: { logs: OrderLog[] }) {
   if (logs.length === 0) {
-    return <p className="py-4 text-sm text-muted-foreground">No order activity yet.</p>;
+    return <p className="py-6 text-center text-sm text-muted-foreground">No order activity yet.</p>;
   }
 
   return (
-    <Table>
-      <TableHeader>
-        <TableRow>
-          <TableHead>Time</TableHead>
-          <TableHead>Action</TableHead>
-          <TableHead>Symbol</TableHead>
-          <TableHead>Strategy</TableHead>
-          <TableHead>Details</TableHead>
-          <TableHead>Status</TableHead>
-        </TableRow>
-      </TableHeader>
-      <TableBody>
-        {logs.map((log) => {
-          const signal = log.signal ?? {};
-          const symbol = log.symbol || String(signal.symbol ?? "--");
-          const strategy = String(signal.strategy_mode ?? signal.phase ?? "--");
-          const premium = signal.target_premium != null ? `$${Number(signal.target_premium).toFixed(2)}` : "";
-          const spread = signal.spread_type ? String(signal.spread_type) : "";
-          const detail = [spread, premium].filter(Boolean).join(" @ ") || (log.limit_price ? `@ $${log.limit_price.toFixed(2)}` : "");
+    <div className="space-y-2">
+      {logs.map((log) => {
+        const signal = log.signal ?? {};
+        const symbol = log.symbol || String(signal.symbol ?? "--");
+        const strategy = String(signal.strategy_mode ?? signal.phase ?? "");
+        const premium = signal.target_premium != null ? `$${Number(signal.target_premium).toFixed(2)}` : "";
+        const spread = signal.spread_type ? String(signal.spread_type) : "";
+        const strike = signal.strike_price ? `$${Number(signal.strike_price).toFixed(0)}` : "";
+        const exp = signal.expiration ? String(signal.expiration) : "";
+        const open = isOpenAction(log.action);
 
-          return (
-            <TableRow key={log._id}>
-              <TableCell className="text-xs text-muted-foreground whitespace-nowrap">
-                {formatTime(log.timestamp)}
-              </TableCell>
-              <TableCell>{actionBadge(log.action)}</TableCell>
-              <TableCell className="font-medium">{symbol}</TableCell>
-              <TableCell>
-                <Badge variant="outline" className="text-[10px]">{strategy}</Badge>
-              </TableCell>
-              <TableCell className="text-xs">{detail}</TableCell>
-              <TableCell>
-                <span className={`text-xs ${log.status === "filled" ? "text-green-500" : "text-muted-foreground"}`}>
+        // Build detail string
+        const parts = [spread, strike, premium, exp].filter(Boolean);
+        const detail = parts.join(" | ") || (log.limit_price ? `@ $${log.limit_price.toFixed(2)}` : "");
+
+        return (
+          <div
+            key={log._id}
+            className={`flex items-center gap-3 rounded-lg border px-4 py-3 ${
+              open
+                ? "border-l-4 border-l-green-500 bg-green-500/5"
+                : "border-l-4 border-l-blue-500 bg-blue-500/5"
+            }`}
+          >
+            {/* Arrow indicator */}
+            <div className={`flex h-8 w-8 shrink-0 items-center justify-center rounded-full text-sm font-bold ${
+              open
+                ? "bg-green-500/15 text-green-600"
+                : "bg-blue-500/15 text-blue-600"
+            }`}>
+              {open ? "S" : "B"}
+            </div>
+
+            {/* Main content */}
+            <div className="flex-1 min-w-0">
+              <div className="flex items-center gap-2">
+                <span className="font-semibold">{symbol}</span>
+                <Badge
+                  variant={open ? "default" : "secondary"}
+                  className={`text-[10px] px-1.5 ${
+                    open
+                      ? "bg-green-600 hover:bg-green-700"
+                      : "bg-blue-600 text-white hover:bg-blue-700"
+                  }`}
+                >
+                  {open ? "SELL TO OPEN" : "BUY TO CLOSE"}
+                </Badge>
+                {strategy && (
+                  <Badge variant="outline" className="text-[10px] px-1.5">{strategy}</Badge>
+                )}
+                <span className={`text-xs ${log.status === "filled" ? "text-green-500" : log.status === "new" ? "text-yellow-500" : "text-muted-foreground"}`}>
                   {log.status}
                 </span>
-              </TableCell>
-            </TableRow>
-          );
-        })}
-      </TableBody>
-    </Table>
+              </div>
+              {detail && (
+                <p className="mt-0.5 text-xs text-muted-foreground">{detail}</p>
+              )}
+            </div>
+
+            {/* Timestamp */}
+            <span className="shrink-0 text-xs text-muted-foreground">
+              {formatTime(log.timestamp)}
+            </span>
+          </div>
+        );
+      })}
+    </div>
   );
 }
 
 export function TradeHistory({ data, orderLogs }: Props) {
-  const [tab, setTab] = useState<"activity" | "positions" | "closed">("activity");
+  const [tab, setTab] = useState<string>("activity");
 
   if (!data) {
     return (
@@ -120,41 +140,48 @@ export function TradeHistory({ data, orderLogs }: Props) {
     );
   }
 
+  const tabs = [
+    { key: "activity", label: "Activity", count: orderLogs?.length ?? 0 },
+    { key: "positions", label: "Open", count: data.open.length },
+    { key: "closed", label: "Closed", count: data.closed.length },
+  ];
+
   return (
     <section>
       <h2 className="mb-4 text-lg font-semibold">Trades</h2>
 
-      {/* Daily P&L card */}
-      <Card size="sm" className="mb-4 w-fit">
-        <CardHeader>
-          <CardTitle>Daily P&amp;L</CardTitle>
-        </CardHeader>
-        <CardContent>
-          <span className={`text-2xl font-bold ${pnlColor(data.daily_pnl)}`}>
-            {formatCurrency(data.daily_pnl)}
-          </span>
-        </CardContent>
-      </Card>
+      {/* Daily P&L + tab bar */}
+      <div className="mb-4 flex items-center gap-4">
+        <Card size="sm" className="w-fit">
+          <CardContent className="px-4 py-2">
+            <span className="text-xs text-muted-foreground mr-2">Daily P&L</span>
+            <span className={`text-lg font-bold ${pnlColor(data.daily_pnl)}`}>
+              {formatCurrency(data.daily_pnl)}
+            </span>
+          </CardContent>
+        </Card>
 
-      {/* Tab switcher */}
-      <div className="mb-4 flex gap-1 rounded-lg bg-muted p-1 w-fit">
-        {([
-          ["activity", `Activity (${orderLogs?.length ?? 0})`],
-          ["positions", `Open (${data.open.length})`],
-          ["closed", `Closed (${data.closed.length})`],
-        ] as const).map(([key, label]) => (
-          <button
-            key={key}
-            className={`rounded-md px-3 py-1.5 text-sm font-medium transition-colors ${
-              tab === key
-                ? "bg-background text-foreground shadow-sm"
-                : "text-muted-foreground hover:text-foreground"
-            }`}
-            onClick={() => setTab(key)}
-          >
-            {label}
-          </button>
-        ))}
+        {/* Tab bar */}
+        <div className="flex rounded-lg border bg-muted/50 p-1">
+          {tabs.map(({ key, label, count }) => (
+            <button
+              key={key}
+              className={`rounded-md px-4 py-2 text-sm font-medium transition-all ${
+                tab === key
+                  ? "bg-background text-foreground shadow-sm border"
+                  : "text-muted-foreground hover:text-foreground hover:bg-background/50"
+              }`}
+              onClick={() => setTab(key)}
+            >
+              {label}
+              <span className={`ml-1.5 inline-flex h-5 min-w-5 items-center justify-center rounded-full px-1.5 text-[10px] font-semibold ${
+                tab === key ? "bg-primary text-primary-foreground" : "bg-muted-foreground/20"
+              }`}>
+                {count}
+              </span>
+            </button>
+          ))}
+        </div>
       </div>
 
       {/* Activity stream */}
@@ -166,7 +193,7 @@ export function TradeHistory({ data, orderLogs }: Props) {
       {tab === "positions" && (
         <div>
           {data.open.length === 0 ? (
-            <p className="py-4 text-sm text-muted-foreground">No open positions.</p>
+            <p className="py-6 text-center text-sm text-muted-foreground">No open positions.</p>
           ) : (
             <Table>
               <TableHeader>
@@ -208,7 +235,7 @@ export function TradeHistory({ data, orderLogs }: Props) {
       {tab === "closed" && (
         <div>
           {data.closed.length === 0 ? (
-            <p className="py-4 text-sm text-muted-foreground">No closed trades.</p>
+            <p className="py-6 text-center text-sm text-muted-foreground">No closed trades.</p>
           ) : (
             <Table>
               <TableHeader>
