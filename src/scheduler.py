@@ -264,7 +264,7 @@ class TradingScheduler:
     def _heartbeat(self) -> None:
         """Write a heartbeat to MongoDB so the dashboard knows the bot process is alive."""
         try:
-            self._db._db["heartbeat"].update_one(
+            self._db.db["heartbeat"].update_one(
                 {"_id": "bot"},
                 {"$set": {"timestamp": datetime.now(timezone.utc), "market_hours": self._is_market_hours()}},
                 upsert=True,

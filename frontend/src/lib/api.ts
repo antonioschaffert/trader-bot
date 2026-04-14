@@ -62,8 +62,32 @@ export interface Settings {
 
 const BASE = `${import.meta.env.VITE_API_URL ?? ""}/api`;
 
+let _authHeader: string | null = sessionStorage.getItem("auth");
+
+export function setCredentials(user: string, pass: string) {
+  _authHeader = "Basic " + btoa(`${user}:${pass}`);
+  sessionStorage.setItem("auth", _authHeader);
+}
+
+export function clearCredentials() {
+  _authHeader = null;
+  sessionStorage.removeItem("auth");
+}
+
+export function hasCredentials() {
+  return _authHeader !== null;
+}
+
+function authHeaders(): HeadersInit {
+  return _authHeader ? { Authorization: _authHeader } : {};
+}
+
 async function fetchJson<T>(path: string): Promise<T> {
-  const res = await fetch(`${BASE}${path}`);
+  const res = await fetch(`${BASE}${path}`, { headers: authHeaders() });
+  if (res.status === 401) {
+    clearCredentials();
+    throw new Error("unauthorized");
+  }
   if (!res.ok) throw new Error(`API error: ${res.status}`);
   return res.json();
 }
@@ -84,9 +108,13 @@ export const api = {
   putSettings: async (settings: Partial<Settings>): Promise<Settings> => {
     const res = await fetch(`${BASE}/settings`, {
       method: "PUT",
-      headers: { "Content-Type": "application/json" },
+      headers: { "Content-Type": "application/json", ...authHeaders() },
       body: JSON.stringify(settings),
     });
+    if (res.status === 401) {
+      clearCredentials();
+      throw new Error("unauthorized");
+    }
     if (!res.ok) throw new Error(`API error: ${res.status}`);
     return res.json();
   },
