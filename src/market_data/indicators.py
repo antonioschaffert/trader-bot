@@ -36,6 +36,19 @@ def compute_indicators(bars: list[Bar]) -> Indicators:
     if bars[-1].vwap:
         result.vwap = bars[-1].vwap
 
+    if len(df) >= 26:
+        macd_ind = ta.trend.MACD(close=df["close"], window_slow=26, window_fast=12, window_sign=9)
+        macd_val = macd_ind.macd().iloc[-1]
+        macd_sig = macd_ind.macd_signal().iloc[-1]
+        macd_hist = macd_ind.macd_diff().iloc[-1]
+        if not pd.isna(macd_val):
+            result.macd = macd_val
+            result.macd_signal = macd_sig
+            result.macd_histogram = macd_hist
+
+    if len(df) >= 20:
+        result.volume_sma_20 = df["volume"].rolling(20).mean().iloc[-1]
+
     return result
 
 

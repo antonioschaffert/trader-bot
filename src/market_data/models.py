@@ -59,6 +59,10 @@ class Indicators:
     upper_bollinger: float | None = None
     lower_bollinger: float | None = None
     vwap: float | None = None
+    macd: float | None = None
+    macd_signal: float | None = None
+    macd_histogram: float | None = None
+    volume_sma_20: float | None = None
 
 
 @dataclass
