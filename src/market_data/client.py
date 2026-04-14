@@ -123,7 +123,7 @@ class MarketDataClient:
             start=start,
             end=end,
             limit=limit,
-            feed=DataFeed.IEX,
+            feed=DataFeed.SIP,
         )
         response = self._stock.get_stock_bars(req)
         raw_bars = response.data.get(symbol, [])
@@ -153,7 +153,7 @@ class MarketDataClient:
             start=start,
             end=end,
             limit=limit,
-            feed=DataFeed.IEX,
+            feed=DataFeed.SIP,
         )
         response = self._stock.get_stock_bars(req)
         raw_bars = response.data.get(symbol, [])
@@ -172,7 +172,7 @@ class MarketDataClient:
         ]
 
     def get_latest_price(self, symbol: str) -> float:
-        req = StockLatestQuoteRequest(symbol_or_symbols=symbol, feed=DataFeed.IEX)
+        req = StockLatestQuoteRequest(symbol_or_symbols=symbol, feed=DataFeed.SIP)
         quotes = self._stock.get_stock_latest_quote(req)
         quote = quotes[symbol]
         return (float(quote.ask_price) + float(quote.bid_price)) / 2
