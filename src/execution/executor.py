@@ -7,7 +7,7 @@ from alpaca.trading.requests import LimitOrderRequest, OptionLegRequest
 
 from src.db.mongo import MongoStore
 from src.event_bus import EventBus
-from src.signals.models import SpreadLeg, TradeSignal
+from src.signals.models import SpreadLeg, TradeSignal, WheelSignal
 
 logger = logging.getLogger(__name__)
 
@@ -87,6 +87,70 @@ class OrderExecutor:
         self._db.save_order_log({
             "order_id": str(order.id),
             "action": "close",
+            "status": str(order.status),
+            "limit_price": limit_price,
+            "timestamp": datetime.now(timezone.utc),
+        })
+
+        return order
+
+    # --- Wheel Strategy: Single-Leg Option Orders ---
+
+    def submit_wheel_order(self, signal: WheelSignal):
+        """Submit a single-leg sell-to-open order for wheel CSP or CC."""
+        order_request = LimitOrderRequest(
+            symbol=signal.option_contract,
+            qty=signal.quantity,
+            side=OrderSide.SELL,
+            time_in_force=TimeInForce.DAY,
+            limit_price=round(signal.target_premium, 2),
+        )
+
+        order = self._client.submit_order(order_request)
+
+        self._db.save_order_log({
+            "order_id": str(order.id),
+            "signal": {
+                "strategy_mode": "wheel",
+                "symbol": signal.symbol,
+                "phase": signal.phase,
+                "option_contract": signal.option_contract,
+                "strike_price": signal.strike_price,
+                "contract_type": signal.contract_type,
+                "target_premium": signal.target_premium,
+                "expiration": str(signal.expiration),
+            },
+            "status": str(order.status),
+            "timestamp": datetime.now(timezone.utc),
+        })
+
+        if str(order.status) in ("filled", "partially_filled"):
+            self._bus.publish("WheelOrderFilled", {
+                "order_id": str(order.id),
+                "signal": signal,
+                "filled_price": float(getattr(order, "filled_avg_price", 0) or 0),
+            })
+        else:
+            self._bus.publish("OrderSubmitted", {"order_id": str(order.id), "signal": signal})
+
+        return order
+
+    def submit_wheel_close_order(self, option_symbol: str, quantity: int, limit_price: float):
+        """Buy-to-close a single-leg option (for rolling or profit target)."""
+        order_request = LimitOrderRequest(
+            symbol=option_symbol,
+            qty=quantity,
+            side=OrderSide.BUY,
+            time_in_force=TimeInForce.DAY,
+            limit_price=round(limit_price, 2),
+        )
+
+        order = self._client.submit_order(order_request)
+
+        self._db.save_order_log({
+            "order_id": str(order.id),
+            "action": "wheel_close",
+            "option_symbol": option_symbol,
             "status": str(order.status),
             "limit_price": limit_price,
             "timestamp": datetime.now(timezone.utc),

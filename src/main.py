@@ -12,11 +12,14 @@ from src.execution.executor import OrderExecutor
 from src.market_data.client import MarketDataClient
 from src.notifications.email_notifier import EmailNotifier
 from src.notifications.sms import SmsNotifier
+from src.positions.assignment_detector import AssignmentDetector
 from src.positions.manager import PositionManager
 from src.risk.manager import RiskManager
 from src.scheduler import TradingScheduler
 from src.signals.exhaustion import ExhaustionSignalGenerator
 from src.signals.swing import SwingSignalGenerator
+from src.signals.wheel import WheelSignalGenerator
+from src.signals.wheel_state import WheelStateManager
 
 logging.basicConfig(
     level=logging.INFO,
@@ -96,6 +99,34 @@ def main():
     executor = OrderExecutor(trading_client, db, exec_config, event_bus)
     position_manager = PositionManager(db, event_bus)
 
+    # Wheel strategy (third strategy)
+    wheel_gen = None
+    wheel_state = None
+    assignment_detector = None
+    if config.wheel.enabled:
+        wheel_state = WheelStateManager(db)
+        wheel_state.load_state()
+
+        wheel_config = {
+            "enabled": config.wheel.enabled,
+            "symbols": config.wheel.symbols,
+            "target_dte": config.wheel.target_dte,
+            "csp_delta_range": config.wheel.csp_delta_range,
+            "cc_delta_range": config.wheel.cc_delta_range,
+            "min_open_interest": config.wheel.min_open_interest,
+            "csp_strike_range_pct": config.wheel.csp_strike_range_pct,
+            "cc_above_bollinger": config.wheel.cc_above_bollinger,
+            "max_buying_power_pct": config.wheel.max_buying_power_pct,
+            "roll_delta_multiplier": config.wheel.roll_delta_multiplier,
+            "roll_profit_pct": config.wheel.roll_profit_pct,
+            "profit_target_pct": config.wheel.profit_target_pct,
+            "max_positions": config.wheel.max_positions,
+        }
+        wheel_gen = WheelSignalGenerator(wheel_config, event_bus, wheel_state)
+        assignment_detector = AssignmentDetector(
+            trading_client, wheel_state, event_bus, db, config.wheel.symbols
+        )
+
     if config.notifications.sms_enabled and config.twilio_account_sid:
         sms = SmsNotifier(config.twilio_account_sid, config.twilio_auth_token, config.twilio_from_number, config.twilio_to_number)
         event_bus.subscribe("OrderFilled", lambda d: sms.notify_fill(d["signal"].symbol, d["signal"].spread_type, d.get("filled_price", 0)))
@@ -104,12 +135,21 @@ def main():
         event_bus.subscribe("RollTriggered", lambda d: sms.notify_roll(d["position"].symbol, d["position"].spread_type))
         event_bus.subscribe("ProfitTargetHit", lambda d: sms.notify_fill(d["position"].symbol, "PROFIT TARGET", d["position"].unrealized_pnl))
 
+    # Wire wheel SMS notifications
+    if config.notifications.sms_enabled and config.twilio_account_sid and config.wheel.enabled:
+        event_bus.subscribe("WheelAssignment", lambda d: sms.notify_fill(d["symbol"], "WHEEL ASSIGNED", d.get("shares", 0)))
+        event_bus.subscribe("WheelSharesCalledAway", lambda d: sms.notify_fill(d["symbol"], "WHEEL CALLED AWAY", d.get("share_profit", 0)))
+        event_bus.subscribe("WheelRolled", lambda d: sms.notify_roll(d["symbol"], f"wheel_{d.get('phase', '')}"))
+        event_bus.subscribe("WheelCycleCompleted", lambda d: sms.notify_fill(d["symbol"], "WHEEL CYCLE DONE", d.get("total_pnl", 0)))
+
     scheduler = TradingScheduler(
         config=config, event_bus=event_bus, market_data=market_data,
         swing_gen=swing_gen, exhaustion_gen=exhaustion_gen,
         risk_manager=risk_manager, executor=executor,
         position_manager=position_manager, trading_client=trading_client,
         option_client=option_client, db=db,
+        wheel_gen=wheel_gen, wheel_state=wheel_state,
+        assignment_detector=assignment_detector,
     )
 
     logger.info("Auto-Trader starting (Enhanced v2)...")
@@ -117,6 +157,11 @@ def main():
     logger.info(f"Paper trading: {config.alpaca_paper}")
     logger.info(f"Swing DTE: {config.swing.target_dte}")
     logger.info(f"Exhaustion enabled: {config.exhaustion.enabled}")
+    logger.info(f"Wheel enabled: {config.wheel.enabled}")
+    if config.wheel.enabled:
+        logger.info(f"Wheel symbols: {config.wheel.symbols}")
+        logger.info(f"Wheel DTE: {config.wheel.target_dte}")
+        logger.info(f"Wheel max positions: {config.wheel.max_positions}")
     logger.info(f"Daily target: ${config.risk.daily_income_target}")
     logger.info(f"Regime detection: {config.regime.enabled}")
     logger.info(f"Drawdown halt at: {config.risk.drawdown.drawdown_halt_pct}%")

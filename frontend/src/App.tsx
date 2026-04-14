@@ -8,6 +8,7 @@ import { PerformancePanel } from "@/components/PerformancePanel";
 import { RejectionTable } from "@/components/RejectionTable";
 import { TradeHistory } from "@/components/TradeHistory";
 import { SettingsPanel } from "@/components/SettingsPanel";
+import { WheelStatus } from "@/components/WheelStatus";
 import { LoginGate } from "@/components/LoginGate";
 
 function Dashboard() {
@@ -23,6 +24,7 @@ function Dashboard() {
   );
   const { data: analytics } = usePolling(api.getAnalytics);
   const { data: greeks } = usePolling(api.getPortfolioGreeks);
+  const { data: wheel } = usePolling(api.getWheel);
 
   const rejFetcher = useCallback(
     () => api.getRejections(50, rejSymbol, rejStrategy),
@@ -48,6 +50,7 @@ function Dashboard() {
           drawdown={status?.drawdown ?? null}
         />
         <MarketOverview market={market} />
+        <WheelStatus data={wheel} />
         <PerformancePanel analytics={analytics} greeks={greeks} />
         <TradeHistory data={trades} />
         <RejectionTable

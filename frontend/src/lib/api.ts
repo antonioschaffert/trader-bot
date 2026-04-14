@@ -165,6 +165,27 @@ export interface AnalyticsData {
   avg_daily_pnl: number;
 }
 
+export interface WheelPosition {
+  symbol: string;
+  phase: string;
+  shares_held: number;
+  cost_basis: number;
+  total_premium_collected: number;
+  current_option_symbol: string;
+  current_option_strike: number;
+  current_option_expiration: string | null;
+  current_option_entry_premium: number;
+  current_option_entry_delta: number;
+  current_option_quantity: number;
+  cycles_completed: number;
+  started_at: string | null;
+  last_updated: string | null;
+}
+
+export interface WheelData {
+  positions: WheelPosition[];
+}
+
 const BASE = `${import.meta.env.VITE_API_URL ?? ""}/api`;
 
 let _authHeader: string | null = sessionStorage.getItem("auth");
@@ -227,4 +248,5 @@ export const api = {
   getAnalytics: () => fetchJson<AnalyticsData>("/analytics"),
   getPortfolioGreeks: () => fetchJson<PortfolioGreeksData>("/portfolio-greeks"),
   getDrawdown: () => fetchJson<DrawdownData>("/drawdown"),
+  getWheel: () => fetchJson<WheelData>("/wheel"),
 };

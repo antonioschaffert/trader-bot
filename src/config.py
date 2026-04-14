@@ -65,6 +65,23 @@ class RiskConfig:
 
 
 @dataclass
+class WheelConfig:
+    enabled: bool = False
+    symbols: list[str] = field(default_factory=lambda: ["SPY"])
+    target_dte: list[int] = field(default_factory=lambda: [14, 35])
+    csp_delta_range: list[float] = field(default_factory=lambda: [0.18, 0.42])
+    cc_delta_range: list[float] = field(default_factory=lambda: [0.18, 0.42])
+    min_open_interest: int = 200
+    csp_strike_range_pct: float = 5.0
+    cc_above_bollinger: bool = True
+    max_buying_power_pct: float = 10.0
+    roll_delta_multiplier: float = 2.0
+    roll_profit_pct: float = 50.0
+    profit_target_pct: int = 50
+    max_positions: int = 2
+
+
+@dataclass
 class RegimeConfig:
     enabled: bool = True
     vix_symbol: str = "VIX"   # VIX proxy for Alpaca (uses VIXY or VIX bars)
@@ -108,6 +125,7 @@ class AppConfig:
     schedule: ScheduleConfig
     notifications: NotificationsConfig
     regime: RegimeConfig = field(default_factory=RegimeConfig)
+    wheel: WheelConfig = field(default_factory=WheelConfig)
 
     # From environment variables
     alpaca_api_key: str = ""
@@ -164,6 +182,10 @@ def load_config(config_path: str = "config/config.yaml", db=None) -> AppConfig:
     regime_raw = raw.get("regime", {})
     regime = RegimeConfig(**{k: v for k, v in regime_raw.items() if k in RegimeConfig.__dataclass_fields__})
 
+    # Build wheel config with defaults for missing fields
+    wheel_raw = raw.get("wheel", {})
+    wheel = WheelConfig(**{k: v for k, v in wheel_raw.items() if k in WheelConfig.__dataclass_fields__})
+
     # Build risk config with nested drawdown
     risk_raw = dict(raw["risk"])
     risk = _build_risk_config(risk_raw)
@@ -177,6 +199,7 @@ def load_config(config_path: str = "config/config.yaml", db=None) -> AppConfig:
         schedule=ScheduleConfig(**raw["schedule"]),
         notifications=NotificationsConfig(**raw["notifications"]),
         regime=regime,
+        wheel=wheel,
         alpaca_api_key=os.getenv("ALPACA_API_KEY", ""),
         alpaca_api_secret=os.getenv("ALPACA_API_SECRET", ""),
         alpaca_paper=os.getenv("ALPACA_PAPER", "true").lower() == "true",

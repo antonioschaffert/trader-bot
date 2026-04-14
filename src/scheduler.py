@@ -3,11 +3,12 @@ Trading Scheduler - Enhanced
 
 Now orchestrates:
 1. Market regime detection (VIX fetch, trend analysis)
-2. Regime-adaptive signal generation
+2. Regime-adaptive signal generation (swing, exhaustion, wheel)
 3. Portfolio Greeks tracking and persistence
 4. Drawdown monitoring with trade result recording
 5. Correlation updates
 6. Performance analytics (computed periodically)
+7. Wheel strategy: CSP/CC scanning, rolling, assignment detection
 """
 
 import logging
@@ -26,8 +27,11 @@ from src.market_data.regime import RegimeDetector
 from src.positions.manager import PositionManager
 from src.risk.correlation import CorrelationManager
 from src.risk.manager import RiskManager
+from src.positions.assignment_detector import AssignmentDetector
 from src.signals.exhaustion import ExhaustionSignalGenerator
 from src.signals.swing import SwingSignalGenerator
+from src.signals.wheel import WheelSignalGenerator
+from src.signals.wheel_state import WheelStateManager
 
 logger = logging.getLogger(__name__)
 
@@ -41,6 +45,9 @@ class TradingScheduler:
         swing_gen: SwingSignalGenerator, exhaustion_gen: ExhaustionSignalGenerator,
         risk_manager: RiskManager, executor: OrderExecutor,
         position_manager: PositionManager, trading_client, option_client, db,
+        wheel_gen: WheelSignalGenerator | None = None,
+        wheel_state: WheelStateManager | None = None,
+        assignment_detector: AssignmentDetector | None = None,
     ):
         self._config = config
         self._bus = event_bus
@@ -62,6 +69,11 @@ class TradingScheduler:
         self._analytics = PerformanceAnalytics(db)
         self._current_regime = None
 
+        # Wheel strategy components (third strategy)
+        self._wheel_gen = wheel_gen
+        self._wheel_state = wheel_state
+        self._assignment_detector = assignment_detector
+
         # Track daily bars per symbol for correlation updates
         self._daily_bars_cache: dict[str, list] = {}
 
@@ -76,6 +88,14 @@ class TradingScheduler:
         self._scheduler.add_job(self._daily_reset, "cron", hour=9, minute=25, id="daily_reset")
         # Compute analytics every 30 minutes
         self._scheduler.add_job(self._update_analytics, "interval", minutes=30, id="analytics")
+
+        # Wheel strategy jobs (third strategy)
+        if self._config.wheel.enabled and self._wheel_gen:
+            self._scheduler.add_job(self._wheel_scan_loop, "interval", minutes=interval, id="wheel_scan")
+            self._scheduler.add_job(self._wheel_position_check, "interval", minutes=1, id="wheel_position_check")
+            self._scheduler.add_job(self._assignment_check_loop, "interval", minutes=2, id="assignment_check")
+            logger.info(f"Wheel strategy enabled: symbols={self._config.wheel.symbols}")
+
         self._heartbeat()
         logger.info(f"Scheduler started (scan interval: {interval}min)")
         self._scheduler.start()
@@ -373,6 +393,235 @@ class TradingScheduler:
         except Exception:
             logger.exception(f"Failed to update position value for {position.order_id}")
 
+    # --- Wheel Strategy (Third Strategy) ---
+
+    def _wheel_scan_loop(self) -> None:
+        """Scan wheel symbols for CSP or CC opportunities."""
+        if not self._is_market_hours() or not self._wheel_gen:
+            return
+
+        try:
+            account = self._trading_client.get_account()
+        except Exception:
+            logger.exception("Failed to fetch account for wheel scan")
+            return
+
+        for symbol in self._config.wheel.symbols:
+            try:
+                self._wheel_scan_symbol(symbol, account)
+            except Exception:
+                logger.exception(f"Error in wheel scan for {symbol}")
+
+    def _wheel_scan_symbol(self, symbol: str, account) -> None:
+        """Evaluate wheel strategy for a single symbol."""
+        position = self._wheel_state.get_position(symbol)
+
+        # Skip if already have an active option (selling_csp or selling_cc)
+        if position.phase in ("selling_csp", "selling_cc"):
+            return
+
+        scan_time = datetime.now(timezone.utc)
+        price = self._market_data.get_latest_price(symbol)
+        daily_bars = self._market_data.get_daily_bars(symbol, limit=60)
+        indicators = compute_indicators(daily_bars)
+
+        # Cache bars for correlation
+        self._daily_bars_cache[symbol] = daily_bars
+
+        # IV data for conviction scoring
+        since = datetime.now(timezone.utc) - timedelta(weeks=52)
+        iv_records = self._db.get_iv_history(symbol, since)
+        iv_history_values = [r["iv"] for r in iv_records]
+        current_iv = self._get_atm_iv(symbol, price)
+        iv_rank = compute_iv_rank(current_iv, iv_history_values) if iv_history_values and current_iv > 0 else None
+        iv_percentile = compute_iv_percentile(current_iv, iv_history_values) if iv_history_values and current_iv > 0 else None
+
+        # Get options chain for wheel DTE range
+        wheel_chain = self._market_data.get_options_chain(
+            symbol,
+            min_dte=self._config.wheel.target_dte[0],
+            max_dte=self._config.wheel.target_dte[1],
+        )
+        self._market_data.enrich_chain_with_quotes(wheel_chain)
+
+        snapshot = MarketSnapshot(
+            symbol=symbol, price=price, bars=daily_bars, options_chain=wheel_chain,
+            indicators=indicators, iv_rank=iv_rank, iv_percentile=iv_percentile,
+            regime=self._current_regime,
+        )
+
+        result = self._wheel_gen.evaluate(snapshot, account)
+
+        # Process wheel signals
+        for signal in result.wheel_signals:
+            # Check drawdown/regime halts
+            can_trade, dd_reason = self._risk_manager.drawdown_manager.can_trade()
+            if not can_trade:
+                logger.info(f"Wheel signal rejected (drawdown): {dd_reason}")
+                result.rejections.append({
+                    "strategy": "wheel", "reason": f"drawdown_halt: {dd_reason}",
+                    "variables": {"symbol": symbol, "phase": signal.phase},
+                })
+                continue
+
+            # Check daily limits
+            daily_loss_limit = self._risk_manager._config.get("daily_loss_limit", 1000)
+            if self._positions.daily_pnl <= -daily_loss_limit:
+                logger.info("Wheel signal rejected: daily loss limit")
+                continue
+
+            logger.info(
+                f"Wheel signal approved: {signal.symbol} {signal.phase} "
+                f"@ ${signal.strike_price} exp {signal.expiration} "
+                f"premium ${signal.target_premium:.2f} (conviction: {signal.conviction_score:.0f})"
+            )
+
+            order = self._executor.submit_wheel_order(signal)
+
+            # Update wheel state
+            new_phase = "selling_csp" if signal.phase == "csp" else "selling_cc"
+            self._wheel_state.transition(
+                symbol, new_phase,
+                current_option_order_id=str(order.id),
+                current_option_symbol=signal.option_contract,
+                current_option_strike=signal.strike_price,
+                current_option_expiration=signal.expiration,
+                current_option_entry_premium=signal.target_premium,
+                current_option_entry_delta=signal.delta,
+                current_option_quantity=signal.quantity,
+            )
+
+            # Add premium to tracking
+            pos = self._wheel_state.get_position(symbol)
+            pos.total_premium_collected += signal.target_premium * 100
+            self._wheel_state.save_state(symbol)
+
+            event_name = "WheelCSPOpened" if signal.phase == "csp" else "WheelCCOpened"
+            self._bus.publish(event_name, {"signal": signal, "order_id": str(order.id)})
+
+        # Save rejections
+        if result.rejections:
+            self._db.save_scan_rejection({
+                "symbol": symbol,
+                "timestamp": scan_time,
+                "market_snapshot": {"price": round(price, 2), "strategy": "wheel"},
+                "rejections": result.rejections,
+            })
+
+    def _wheel_position_check(self) -> None:
+        """Check active wheel options for rolling triggers or profit targets."""
+        if not self._is_market_hours() or not self._wheel_state:
+            return
+
+        for position in self._wheel_state.get_active_positions():
+            if position.phase not in ("selling_csp", "selling_cc"):
+                continue
+            if not position.current_option_symbol:
+                continue
+
+            try:
+                self._check_wheel_option(position)
+            except Exception:
+                logger.exception(f"Error checking wheel position for {position.symbol}")
+
+    def _check_wheel_option(self, position) -> None:
+        """Check a single wheel option for roll/profit/expiry triggers."""
+        from alpaca.data.requests import OptionLatestQuoteRequest
+
+        option_sym = position.current_option_symbol
+        try:
+            req = OptionLatestQuoteRequest(symbol_or_symbols=[option_sym])
+            quotes = self._option_client.get_option_latest_quote(req)
+        except Exception:
+            logger.exception(f"Failed to get quote for wheel option {option_sym}")
+            return
+
+        if option_sym not in quotes:
+            return
+
+        q = quotes[option_sym]
+        current_price = (float(q.bid_price) + float(q.ask_price)) / 2
+        entry_premium = position.current_option_entry_premium
+
+        if entry_premium <= 0:
+            return
+
+        # Profit target: close at configured % of max profit
+        profit_target_pct = self._config.wheel.profit_target_pct
+        profit_pct = (entry_premium - current_price) / entry_premium * 100
+        if profit_pct >= profit_target_pct:
+            logger.info(
+                f"WHEEL PROFIT TARGET: {position.symbol} {position.phase} "
+                f"profit {profit_pct:.0f}% >= {profit_target_pct}%"
+            )
+            self._executor.submit_wheel_close_order(
+                option_sym, position.current_option_quantity, current_price
+            )
+            # Transition back
+            if position.phase == "selling_csp":
+                self._wheel_state.transition(position.symbol, "idle")
+            else:
+                self._wheel_state.transition(position.symbol, "holding_shares")
+
+            self._db.save_trade({
+                "order_id": position.current_option_order_id,
+                "strategy_mode": "wheel",
+                "symbol": position.symbol,
+                "spread_type": "cash_secured_put" if position.phase == "selling_csp" else "covered_call",
+                "entry_premium": entry_premium,
+                "close_premium": current_price,
+                "pnl": (entry_premium - current_price) * 100 * position.current_option_quantity,
+                "reason": "profit_target",
+                "closed_at": datetime.now(timezone.utc),
+            })
+            self._bus.publish("WheelProfitTarget", {"symbol": position.symbol, "phase": position.phase})
+            return
+
+        # Roll trigger: delta >= 2x entry delta
+        # We'd need to fetch current Greeks for this; use snapshot API
+        roll_mult = self._config.wheel.roll_delta_multiplier
+        entry_delta = abs(position.current_option_entry_delta)
+        if entry_delta > 0:
+            try:
+                from alpaca.data.requests import OptionSnapshotRequest
+                snap_req = OptionSnapshotRequest(symbol_or_symbols=[option_sym])
+                snaps = self._option_client.get_option_snapshot(snap_req)
+                if option_sym in snaps:
+                    snap = snaps[option_sym]
+                    current_delta = abs(float(snap.greeks.delta or 0)) if snap.greeks else 0
+                    if current_delta >= entry_delta * roll_mult:
+                        logger.info(
+                            f"WHEEL ROLL TRIGGER: {position.symbol} delta {current_delta:.2f} "
+                            f">= {entry_delta:.2f} * {roll_mult}"
+                        )
+                        self._executor.submit_wheel_close_order(
+                            option_sym, position.current_option_quantity, current_price
+                        )
+                        # Clear option but stay in same logical phase for re-entry
+                        if position.phase == "selling_csp":
+                            self._wheel_state.transition(position.symbol, "idle")
+                        else:
+                            self._wheel_state.transition(position.symbol, "holding_shares")
+
+                        self._bus.publish("WheelRolled", {
+                            "symbol": position.symbol,
+                            "phase": position.phase,
+                            "old_delta": entry_delta,
+                            "new_delta": current_delta,
+                        })
+                        return
+            except Exception:
+                logger.debug(f"Could not fetch Greeks for roll check on {option_sym}")
+
+    def _assignment_check_loop(self) -> None:
+        """Poll Alpaca for assignment events."""
+        if not self._is_market_hours() or not self._assignment_detector:
+            return
+        try:
+            self._assignment_detector.check()
+        except Exception:
+            logger.exception("Error in assignment detection")
+
     def _get_atm_iv(self, symbol: str, price: float) -> float:
         try:
             chain = self._market_data.get_options_chain(symbol, min_dte=20, max_dte=40)
@@ -463,3 +712,20 @@ class TradingScheduler:
             "max_portfolio_vega": c.risk.max_portfolio_vega,
             "max_contracts_per_trade": c.risk.max_contracts_per_trade,
         }
+        # Wheel strategy config
+        if self._wheel_gen:
+            self._wheel_gen._config = {
+                "enabled": c.wheel.enabled,
+                "symbols": c.wheel.symbols,
+                "target_dte": c.wheel.target_dte,
+                "csp_delta_range": c.wheel.csp_delta_range,
+                "cc_delta_range": c.wheel.cc_delta_range,
+                "min_open_interest": c.wheel.min_open_interest,
+                "csp_strike_range_pct": c.wheel.csp_strike_range_pct,
+                "cc_above_bollinger": c.wheel.cc_above_bollinger,
+                "max_buying_power_pct": c.wheel.max_buying_power_pct,
+                "roll_delta_multiplier": c.wheel.roll_delta_multiplier,
+                "roll_profit_pct": c.wheel.roll_profit_pct,
+                "profit_target_pct": c.wheel.profit_target_pct,
+                "max_positions": c.wheel.max_positions,
+            }

@@ -51,6 +51,21 @@ risk:
     drawdown_severe_pct: 10.0        # severe size reduction at this drawdown %
     drawdown_halt_pct: 15.0          # halt trading at this drawdown %
 
+wheel:
+  enabled: true
+  symbols: ["SPY", "QQQ"]             # wheel-specific symbols (must afford 100 shares)
+  target_dte: [14, 35]                # 14-35 days to expiration
+  csp_delta_range: [0.18, 0.42]       # absolute delta for cash-secured puts
+  cc_delta_range: [0.18, 0.42]        # absolute delta for covered calls
+  min_open_interest: 200              # minimum open interest filter
+  csp_strike_range_pct: 5             # CSP strike within 5% of current price
+  cc_above_bollinger: true            # require CC strike above upper Bollinger Band
+  max_buying_power_pct: 10            # max % of account per wheel position
+  roll_delta_multiplier: 2.0          # roll when delta >= entry_delta * this
+  roll_profit_pct: 50                 # close at 50% of max profit
+  profit_target_pct: 50               # take profit at 50% premium decay
+  max_positions: 2                    # max concurrent wheel positions
+
 regime:
   enabled: true
   vix_symbol: "VIXY"                 # VIX proxy ETF (Alpaca doesn't have VIX directly)

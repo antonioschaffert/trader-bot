@@ -118,6 +118,26 @@ class MongoStore:
             doc.pop("_id", None)
         return doc
 
+    # --- Wheel State ---
+    def save_wheel_state(self, state: dict) -> None:
+        self.db["wheel_state"].update_one(
+            {"symbol": state["symbol"]},
+            {"$set": {**state, "updated_at": datetime.now(timezone.utc)}},
+            upsert=True,
+        )
+
+    def get_wheel_states(self) -> list[dict]:
+        results = list(self.db["wheel_state"].find())
+        for r in results:
+            r["_id"] = str(r["_id"])
+        return results
+
+    def get_wheel_state(self, symbol: str) -> dict | None:
+        doc = self.db["wheel_state"].find_one({"symbol": symbol})
+        if doc:
+            doc["_id"] = str(doc["_id"])
+        return doc
+
     # --- Performance Analytics (cached) ---
     def save_performance_cache(self, report: dict) -> None:
         self.db["performance"].update_one(
