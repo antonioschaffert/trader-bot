@@ -1,5 +1,6 @@
 import type { StatusData, MarketData } from "@/lib/api";
 import { Badge } from "@/components/ui/badge";
+import { formatTimeET } from "@/lib/time";
 
 interface Props {
   status: StatusData | null;
@@ -8,24 +9,37 @@ interface Props {
 }
 
 export function StatusBar({ status, market, onOpenSettings }: Props) {
-  const running = status?.running ?? false;
+  const botAlive = status?.running ?? false;
+  const scanning = status?.scanning ?? false;
+  const marketHours = status?.market_hours ?? false;
   const paperMode = status?.paper_mode ?? true;
-  const lastScan = status?.last_scan_time
-    ? new Date(status.last_scan_time).toLocaleTimeString()
-    : "--:--:--";
+  const lastScan = formatTimeET(status?.last_scan_time);
 
   const spyPrice = market?.find((m) => m.symbol === "SPY")?.price;
   const qqqPrice = market?.find((m) => m.symbol === "QQQ")?.price;
 
+  const botLabel = !botAlive
+    ? "Offline"
+    : scanning
+      ? "Scanning"
+      : marketHours
+        ? "Idle"
+        : "Market Closed";
+  const dotColor = !botAlive
+    ? "bg-red-500"
+    : scanning
+      ? "bg-green-500 animate-pulse"
+      : "bg-yellow-500";
+
   return (
     <header className="sticky top-0 z-40 flex items-center justify-between border-b bg-background/95 px-6 py-3 backdrop-blur supports-[backdrop-filter]:bg-background/60">
       <div className="flex items-center gap-4">
-        {/* Running indicator */}
+        {/* Bot status indicator */}
         <span className="flex items-center gap-2 text-sm font-medium">
           <span
-            className={`inline-block size-2.5 rounded-full ${running ? "bg-green-500" : "bg-red-500"}`}
+            className={`inline-block size-2.5 rounded-full ${dotColor}`}
           />
-          {running ? "Running" : "Stopped"}
+          {botLabel}
         </span>
 
         {/* Paper / Live badge */}

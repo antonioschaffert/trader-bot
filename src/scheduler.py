@@ -44,7 +44,9 @@ class TradingScheduler:
         interval = self._config.schedule.scan_interval_minutes
         self._scheduler.add_job(self._scan_loop, "interval", minutes=interval, id="scan_loop")
         self._scheduler.add_job(self._position_check_loop, "interval", minutes=1, id="position_check")
+        self._scheduler.add_job(self._heartbeat, "interval", seconds=30, id="heartbeat")
         self._scheduler.add_job(self._daily_reset, "cron", hour=9, minute=25, id="daily_reset")
+        self._heartbeat()  # write immediately on startup
         logger.info(f"Scheduler started (scan interval: {interval}min)")
         self._scheduler.start()
 
@@ -60,10 +62,39 @@ class TradingScheduler:
     def _scan_loop(self) -> None:
         if not self._is_market_hours():
             return
-        # Reload config from DB
+        # Reload config from DB and propagate to sub-components
         try:
             from src.config import load_config
             self._config = load_config(db=self._db)
+            c = self._config
+            self._swing_gen._config = {
+                "target_dte": c.swing.target_dte, "short_strike_delta": c.swing.short_strike_delta,
+                "spread_width": c.swing.spread_width, "min_premium": c.swing.min_premium,
+                "iv_rank_threshold": c.swing.iv_rank_threshold, "profit_target_pct": c.swing.profit_target_pct,
+            }
+            self._exhaustion_gen._config = {
+                "enabled": c.exhaustion.enabled, "target_dte": c.exhaustion.target_dte,
+                "spread_width": c.exhaustion.spread_width, "min_premium": c.exhaustion.min_premium,
+                "profit_target_pct": c.exhaustion.profit_target_pct,
+                "stop_loss_multiplier": c.exhaustion.stop_loss_multiplier,
+                "time_window_start": c.exhaustion.time_window_start,
+                "rsi_overbought": c.exhaustion.rsi_overbought, "rsi_oversold": c.exhaustion.rsi_oversold,
+                "intraday_timeframe": c.exhaustion.intraday_timeframe,
+                "min_signals_required": c.exhaustion.min_signals_required,
+                "min_move_from_open_pct": c.exhaustion.min_move_from_open_pct,
+                "strong_move_pct": c.exhaustion.strong_move_pct,
+                "close_by_eod": c.exhaustion.close_by_eod,
+            }
+            self._risk_manager._config = {
+                "max_concurrent_spreads": c.risk.max_concurrent_spreads,
+                "max_risk_per_trade_pct": c.risk.max_risk_per_trade_pct,
+                "max_buying_power_usage_pct": c.risk.max_buying_power_usage_pct,
+                "stop_loss_multiplier": c.risk.stop_loss_multiplier,
+                "roll_delta_threshold": c.risk.roll_delta_threshold, "dte_exit": c.risk.dte_exit,
+                "daily_loss_limit": c.risk.daily_loss_limit, "daily_income_target": c.risk.daily_income_target,
+                "max_same_direction_per_symbol": c.risk.max_same_direction_per_symbol,
+                "max_portfolio_delta_per_symbol": c.risk.max_portfolio_delta_per_symbol,
+            }
         except Exception:
             logger.exception("Failed to reload config from DB, using cached config")
         for symbol in self._config.symbols:
@@ -229,6 +260,17 @@ class TradingScheduler:
         except Exception:
             logger.exception(f"Failed to get ATM IV for {symbol}")
             return 0.0
+
+    def _heartbeat(self) -> None:
+        """Write a heartbeat to MongoDB so the dashboard knows the bot process is alive."""
+        try:
+            self._db._db["heartbeat"].update_one(
+                {"_id": "bot"},
+                {"$set": {"timestamp": datetime.now(timezone.utc), "market_hours": self._is_market_hours()}},
+                upsert=True,
+            )
+        except Exception:
+            logger.exception("Failed to write heartbeat")
 
     def _daily_reset(self) -> None:
         self._positions.reset_daily()

@@ -1,5 +1,7 @@
 export interface StatusData {
   running: boolean;
+  scanning: boolean;
+  market_hours: boolean;
   paper_mode: boolean;
   last_scan_time: string | null;
   symbols: string[];
