@@ -6,7 +6,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.security import HTTPBasic, HTTPBasicCredentials
 
 from api.routes import status as status_route, market, rejections, trades, iv_history, settings
-from api.routes import regime, analytics, wheel, accounts
+from api.routes import regime, analytics, wheel, accounts, balance
 
 app = FastAPI(title="Auto-Trader Dashboard API")
 
@@ -48,3 +48,4 @@ app.include_router(regime.router, prefix="/api", dependencies=[Depends(check_aut
 app.include_router(analytics.router, prefix="/api", dependencies=[Depends(check_auth)])
 app.include_router(wheel.router, prefix="/api", dependencies=[Depends(check_auth)])
 app.include_router(accounts.router, prefix="/api", dependencies=[Depends(check_auth)])
+app.include_router(balance.router, prefix="/api", dependencies=[Depends(check_auth)])
