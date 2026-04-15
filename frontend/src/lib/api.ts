@@ -221,6 +221,17 @@ export interface WheelData {
   positions: WheelPosition[];
 }
 
+export interface RegimeHistoryPoint {
+  _id: string;
+  timestamp: string;
+  volatility_regime?: string;
+  trend_regime?: string;
+  market_phase?: string;
+  vix_current?: number;
+  adx?: number;
+  trend_score?: number;
+}
+
 const BASE = `${import.meta.env.VITE_API_URL ?? ""}/api`;
 
 let _authHeader: string | null = sessionStorage.getItem("auth");
@@ -324,6 +335,7 @@ export const api = {
   getPortfolioGreeks: (accountId = "") => fetchJson<PortfolioGreeksData>(withAcct("/portfolio-greeks", accountId)),
   getDrawdown: (accountId = "") => fetchJson<DrawdownData>(withAcct("/drawdown", accountId)),
   getWheel: (accountId = "") => fetchJson<WheelData>(withAcct("/wheel", accountId)),
+  getRegimeHistory: (limit = 50) => fetchJson<RegimeHistoryPoint[]>(`/regime/history?limit=${limit}`),
 
   // Account management
   getAccounts: () => fetchJson<{ accounts: Account[] }>("/accounts"),

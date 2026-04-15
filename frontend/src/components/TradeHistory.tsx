@@ -1,4 +1,4 @@
-import type { TradesResponse, OrderLog } from "@/lib/api";
+import type { TradesResponse, OrderLog, EquityCurvePoint } from "@/lib/api";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import {
   Table,
@@ -11,10 +11,20 @@ import {
 import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useState } from "react";
+import {
+  ResponsiveContainer,
+  BarChart,
+  Bar,
+  XAxis,
+  YAxis,
+  Tooltip,
+  Cell,
+} from "recharts";
 
 interface Props {
   data: TradesResponse | null;
   orderLogs: OrderLog[] | null;
+  equityCurve?: EquityCurvePoint[];
 }
 
 function formatCurrency(value: number): string {
@@ -50,6 +60,56 @@ function formatTime(iso: string): string {
 /** Determine if this is a sell/open action (selling premium) or a buy/close action */
 function isOpenAction(action: string): boolean {
   return action === "open" || action === "wheel_open";
+}
+
+function DailyPnlChart({ equityCurve }: { equityCurve: EquityCurvePoint[] }) {
+  const recent = equityCurve.slice(-7);
+  if (recent.length === 0) return null;
+
+  const data = recent.map((d) => ({
+    date: (() => {
+      try {
+        const dt = new Date(d.date);
+        return `${dt.getMonth() + 1}/${dt.getDate()}`;
+      } catch {
+        return d.date;
+      }
+    })(),
+    pnl: d.daily_pnl,
+  }));
+
+  return (
+    <ResponsiveContainer width="100%" height={80}>
+      <BarChart data={data} margin={{ top: 5, right: 0, left: -15, bottom: 0 }}>
+        <XAxis
+          dataKey="date"
+          tick={{ fontSize: 9, fill: "var(--color-muted-foreground)" }}
+          tickLine={false}
+          axisLine={false}
+        />
+        <YAxis
+          tick={{ fontSize: 9, fill: "var(--color-muted-foreground)" }}
+          tickLine={false}
+          axisLine={false}
+          tickFormatter={(v: number) => `$${v}`}
+        />
+        <Tooltip
+          contentStyle={{
+            backgroundColor: "var(--color-background)",
+            border: "1px solid var(--color-border)",
+            borderRadius: "8px",
+            fontSize: "11px",
+          }}
+          formatter={(value) => [formatCurrency(Number(value)), "P&L"]}
+        />
+        <Bar dataKey="pnl" radius={[3, 3, 0, 0]} barSize={16}>
+          {data.map((entry, index) => (
+            <Cell key={index} fill={entry.pnl >= 0 ? "var(--color-chart-green)" : "var(--color-chart-red)"} />
+          ))}
+        </Bar>
+      </BarChart>
+    </ResponsiveContainer>
+  );
 }
 
 function ActivityStream({ logs }: { logs: OrderLog[] }) {
@@ -93,7 +153,7 @@ function ActivityStream({ logs }: { logs: OrderLog[] }) {
 
             {/* Main content */}
             <div className="flex-1 min-w-0">
-              <div className="flex items-center gap-2">
+              <div className="flex flex-wrap items-center gap-2">
                 <span className="font-semibold">{symbol}</span>
                 <Badge
                   variant={open ? "default" : "secondary"}
@@ -128,7 +188,7 @@ function ActivityStream({ logs }: { logs: OrderLog[] }) {
   );
 }
 
-export function TradeHistory({ data, orderLogs }: Props) {
+export function TradeHistory({ data, orderLogs, equityCurve }: Props) {
   const [tab, setTab] = useState<string>("activity");
 
   if (!data) {
@@ -150,8 +210,8 @@ export function TradeHistory({ data, orderLogs }: Props) {
     <section>
       <h2 className="mb-4 text-lg font-semibold">Trades</h2>
 
-      {/* Daily P&L + tab bar */}
-      <div className="mb-4 flex items-center gap-4">
+      {/* Daily P&L + chart + tab bar */}
+      <div className="mb-4 flex flex-col gap-4 sm:flex-row sm:items-center">
         <Card size="sm" className="w-fit">
           <CardContent className="px-4 py-2">
             <span className="text-xs text-muted-foreground mr-2">Daily P&L</span>
@@ -160,6 +220,14 @@ export function TradeHistory({ data, orderLogs }: Props) {
             </span>
           </CardContent>
         </Card>
+
+        {equityCurve && equityCurve.length > 0 && (
+          <Card size="sm" className="w-fit min-w-[200px]">
+            <CardContent className="px-4 py-2">
+              <DailyPnlChart equityCurve={equityCurve} />
+            </CardContent>
+          </Card>
+        )}
 
         {/* Tab bar */}
         <div className="flex rounded-lg border bg-muted/50 p-1">
@@ -195,6 +263,7 @@ export function TradeHistory({ data, orderLogs }: Props) {
           {data.open.length === 0 ? (
             <p className="py-6 text-center text-sm text-muted-foreground">No open positions.</p>
           ) : (
+            <div className="overflow-x-auto -mx-2 px-2 sm:mx-0 sm:px-0">
             <Table>
               <TableHeader>
                 <TableRow>
@@ -227,6 +296,7 @@ export function TradeHistory({ data, orderLogs }: Props) {
                 ))}
               </TableBody>
             </Table>
+            </div>
           )}
         </div>
       )}
@@ -237,6 +307,7 @@ export function TradeHistory({ data, orderLogs }: Props) {
           {data.closed.length === 0 ? (
             <p className="py-6 text-center text-sm text-muted-foreground">No closed trades.</p>
           ) : (
+            <div className="overflow-x-auto -mx-2 px-2 sm:mx-0 sm:px-0">
             <Table>
               <TableHeader>
                 <TableRow>
@@ -269,6 +340,7 @@ export function TradeHistory({ data, orderLogs }: Props) {
                 ))}
               </TableBody>
             </Table>
+            </div>
           )}
         </div>
       )}

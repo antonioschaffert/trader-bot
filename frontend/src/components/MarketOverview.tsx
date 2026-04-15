@@ -1,7 +1,10 @@
-import type { MarketData } from "@/lib/api";
+import { useState, useEffect } from "react";
+import type { MarketData, IvPoint } from "@/lib/api";
+import { api } from "@/lib/api";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
+import { AreaChart, Area, ResponsiveContainer } from "recharts";
 
 interface Props {
   market: MarketData[] | null;
@@ -40,6 +43,50 @@ function adxLabel(adx: number | null): string {
   if (adx < 25) return `${adx.toFixed(0)} (Trans.)`;
   if (adx < 40) return `${adx.toFixed(0)} (Trend)`;
   return `${adx.toFixed(0)} (Strong)`;
+}
+
+function IvSparkline({ symbol }: { symbol: string }) {
+  const [data, setData] = useState<IvPoint[] | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    api.getIvHistory(symbol, 7).then((result) => {
+      if (!cancelled) setData(result);
+    }).catch(() => {});
+    return () => { cancelled = true; };
+  }, [symbol]);
+
+  if (!data || data.length < 2) return null;
+
+  const chartData = data.map((d) => ({ iv: d.iv }));
+
+  return (
+    <div className="mt-2 border-t pt-2">
+      <div className="flex items-center justify-between">
+        <span className="text-[10px] text-muted-foreground">IV (7d)</span>
+        <span className="text-[10px] font-medium">
+          {(data[data.length - 1].iv * 100).toFixed(1)}%
+        </span>
+      </div>
+      <ResponsiveContainer width="100%" height={30}>
+        <AreaChart data={chartData} margin={{ top: 2, right: 0, left: 0, bottom: 0 }}>
+          <defs>
+            <linearGradient id={`ivGrad-${symbol}`} x1="0" y1="0" x2="0" y2="1">
+              <stop offset="5%" stopColor="var(--color-chart-amber)" stopOpacity={0.4} />
+              <stop offset="95%" stopColor="var(--color-chart-amber)" stopOpacity={0} />
+            </linearGradient>
+          </defs>
+          <Area
+            type="monotone"
+            dataKey="iv"
+            stroke="var(--color-chart-amber)"
+            strokeWidth={1.5}
+            fill={`url(#ivGrad-${symbol})`}
+          />
+        </AreaChart>
+      </ResponsiveContainer>
+    </div>
+  );
 }
 
 export function MarketOverview({ market }: Props) {
@@ -136,6 +183,7 @@ export function MarketOverview({ market }: Props) {
                     </p>
                   </div>
                 </div>
+                <IvSparkline symbol={m.symbol} />
               </CardContent>
             </Card>
           );

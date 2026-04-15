@@ -10,6 +10,18 @@ import {
 } from "@/components/ui/table";
 import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
+import { EquityCurve } from "@/components/EquityCurve";
+import { PnlBySymbolChart } from "@/components/PnlBySymbolChart";
+import {
+  ResponsiveContainer,
+  BarChart,
+  Bar,
+  XAxis,
+  YAxis,
+  Tooltip,
+  CartesianGrid,
+  Cell,
+} from "recharts";
 
 interface Props {
   analytics: AnalyticsData | null;
@@ -33,6 +45,124 @@ function metricColor(value: number, goodAbove: number, badBelow: number): string
   return "text-yellow-500";
 }
 
+function GreeksBarChart({ perSymbol }: { perSymbol: Record<string, Record<string, number>> }) {
+  const symbols = Object.keys(perSymbol);
+  if (symbols.length === 0) return null;
+
+  const chartData = symbols.map((sym) => ({
+    symbol: sym,
+    delta: perSymbol[sym].delta ?? 0,
+    theta: perSymbol[sym].theta ?? 0,
+    vega: perSymbol[sym].vega ?? 0,
+  }));
+
+  return (
+    <Card size="sm" className="md:col-span-2 xl:col-span-3">
+      <CardHeader>
+        <CardTitle>Greeks by Symbol</CardTitle>
+      </CardHeader>
+      <CardContent>
+        <ResponsiveContainer width="100%" height={160}>
+          <BarChart data={chartData} layout="vertical" margin={{ top: 0, right: 10, left: 10, bottom: 0 }}>
+            <CartesianGrid strokeDasharray="3 3" stroke="var(--color-border)" horizontal={false} />
+            <XAxis
+              type="number"
+              tick={{ fontSize: 10, fill: "var(--color-muted-foreground)" }}
+              tickLine={false}
+              axisLine={false}
+            />
+            <YAxis
+              type="category"
+              dataKey="symbol"
+              tick={{ fontSize: 11, fill: "var(--color-foreground)" }}
+              tickLine={false}
+              axisLine={false}
+              width={40}
+            />
+            <Tooltip
+              contentStyle={{
+                backgroundColor: "var(--color-background)",
+                border: "1px solid var(--color-border)",
+                borderRadius: "8px",
+                fontSize: "12px",
+              }}
+              formatter={(value, name) => [Number(value).toFixed(2), String(name)]}
+            />
+            <Bar dataKey="delta" fill="var(--color-chart-blue)" barSize={10} radius={[0, 3, 3, 0]} name="Delta" />
+            <Bar dataKey="theta" fill="var(--color-chart-green)" barSize={10} radius={[0, 3, 3, 0]} name="Theta" />
+            <Bar dataKey="vega" fill="var(--color-chart-purple)" barSize={10} radius={[0, 3, 3, 0]} name="Vega" />
+          </BarChart>
+        </ResponsiveContainer>
+      </CardContent>
+    </Card>
+  );
+}
+
+function GreeksTooltip({ active, payload, label }: { active?: boolean; payload?: { value: number; name: string; fill: string }[]; label?: string }) {
+  if (!active || !payload?.length) return null;
+  return (
+    <div className="rounded-lg border bg-background/95 px-3 py-2 text-xs shadow-md backdrop-blur">
+      <p className="font-medium">{label}</p>
+      {payload.map((p, i) => (
+        <p key={i} style={{ color: p.fill }}>{p.name}: {p.value.toFixed(2)}</p>
+      ))}
+    </div>
+  );
+}
+
+// Suppress unused for now -- GreeksTooltip is available for future use
+void GreeksTooltip;
+
+function DailyPnlMiniChart({ equityCurve }: { equityCurve: { date: string; daily_pnl: number }[] }) {
+  const recent = equityCurve.slice(-14);
+  if (recent.length === 0) return null;
+
+  const data = recent.map((d) => ({
+    date: (() => {
+      try {
+        const dt = new Date(d.date);
+        return `${dt.getMonth() + 1}/${dt.getDate()}`;
+      } catch {
+        return d.date;
+      }
+    })(),
+    pnl: d.daily_pnl,
+  }));
+
+  return (
+    <ResponsiveContainer width="100%" height={100}>
+      <BarChart data={data} margin={{ top: 5, right: 0, left: -20, bottom: 0 }}>
+        <XAxis
+          dataKey="date"
+          tick={{ fontSize: 9, fill: "var(--color-muted-foreground)" }}
+          tickLine={false}
+          axisLine={false}
+        />
+        <YAxis
+          tick={{ fontSize: 9, fill: "var(--color-muted-foreground)" }}
+          tickLine={false}
+          axisLine={false}
+          tickFormatter={(v: number) => `$${v}`}
+        />
+        <Tooltip
+          contentStyle={{
+            backgroundColor: "var(--color-background)",
+            border: "1px solid var(--color-border)",
+            borderRadius: "8px",
+            fontSize: "11px",
+          }}
+          formatter={(value) => [formatCurrency(Number(value)), "P&L"]}
+        />
+        <Bar dataKey="pnl" radius={[2, 2, 0, 0]} barSize={12}>
+          {data.map((entry, index) => (
+            <Cell key={index} fill={entry.pnl >= 0 ? "var(--color-chart-green)" : "var(--color-chart-red)"} />
+          ))}
+        </Bar>
+      </BarChart>
+    </ResponsiveContainer>
+  );
+}
+
 export function PerformancePanel({ analytics, greeks }: Props) {
   if (!analytics && !greeks) {
     return (
@@ -43,9 +173,44 @@ export function PerformancePanel({ analytics, greeks }: Props) {
     );
   }
 
+  const hasEquityCurve = analytics && analytics.equity_curve && analytics.equity_curve.length > 0;
+  const hasBySymbol = analytics && analytics.by_symbol && Object.keys(analytics.by_symbol).length > 0;
+  const hasGreeksPerSymbol = greeks && Object.keys(greeks.per_symbol).length > 0;
+
   return (
     <section>
       <h2 className="mb-4 text-lg font-semibold">Performance & Greeks</h2>
+
+      {/* Charts row */}
+      {(hasEquityCurve || hasBySymbol) && (
+        <div className="mb-4 grid grid-cols-1 gap-4 lg:grid-cols-3">
+          {hasEquityCurve && (
+            <div className="lg:col-span-2">
+              <EquityCurve data={analytics.equity_curve} />
+            </div>
+          )}
+          {hasBySymbol && (
+            <div>
+              <PnlBySymbolChart bySymbol={analytics.by_symbol} />
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* Daily P&L mini chart */}
+      {hasEquityCurve && (
+        <div className="mb-4">
+          <Card size="sm">
+            <CardHeader>
+              <CardTitle>Daily P&L (Last 14 Days)</CardTitle>
+            </CardHeader>
+            <CardContent>
+              <DailyPnlMiniChart equityCurve={analytics.equity_curve} />
+            </CardContent>
+          </Card>
+        </div>
+      )}
+
       <div className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-3">
         {/* Key Metrics */}
         {analytics && analytics.total_trades > 0 && (
@@ -178,22 +343,13 @@ export function PerformancePanel({ analytics, greeks }: Props) {
                   <p className="font-medium">{greeks.theta_to_delta_ratio.toFixed(2)}</p>
                 </div>
               </div>
-              {/* Per-symbol breakdown */}
-              {Object.keys(greeks.per_symbol).length > 0 && (
-                <div className="mt-3 border-t pt-2">
-                  <span className="text-xs text-muted-foreground">Per Symbol</span>
-                  {Object.entries(greeks.per_symbol).map(([sym, g]) => (
-                    <div key={sym} className="mt-1 flex items-center justify-between text-xs">
-                      <span className="font-medium">{sym}</span>
-                      <span>
-                        D:{g.delta?.toFixed(0)} G:{g.gamma?.toFixed(2)} T:{g.theta?.toFixed(1)} V:{g.vega?.toFixed(1)}
-                      </span>
-                    </div>
-                  ))}
-                </div>
-              )}
             </CardContent>
           </Card>
+        )}
+
+        {/* Greeks Bar Chart */}
+        {hasGreeksPerSymbol && (
+          <GreeksBarChart perSymbol={greeks.per_symbol} />
         )}
 
         {/* Strategy Breakdown */}

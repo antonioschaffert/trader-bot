@@ -1,4 +1,4 @@
-import { useState, useCallback, useMemo } from "react";
+import { useState, useCallback } from "react";
 import { api, hasCredentials } from "@/lib/api";
 import { usePolling } from "@/hooks/usePolling";
 import { StatusBar } from "@/components/StatusBar";
@@ -11,6 +11,8 @@ import { SettingsPanel } from "@/components/SettingsPanel";
 import { WheelStatus } from "@/components/WheelStatus";
 import { AccountsPanel } from "@/components/AccountsPanel";
 import { LoginGate } from "@/components/LoginGate";
+import { ConfigHealthCheck } from "@/components/ConfigHealthCheck";
+import { DailyRiskControl } from "@/components/DailyRiskControl";
 
 function Dashboard() {
   const [settingsOpen, setSettingsOpen] = useState(false);
@@ -60,14 +62,27 @@ function Dashboard() {
         onOpenAccounts={() => setAccountsOpen(true)}
       />
       <main className="mx-auto max-w-7xl space-y-8 px-6 py-6">
+        <ConfigHealthCheck settings={settings} />
         <MarketRegime
           regime={status?.regime ?? null}
           drawdown={status?.drawdown ?? null}
         />
+        <DailyRiskControl
+          dailyPnl={trades?.daily_pnl ?? 0}
+          settings={settings}
+          onSaved={() => {
+            refreshSettings();
+            refreshStatus();
+          }}
+        />
         <MarketOverview market={market} />
         <WheelStatus data={wheel} />
         <PerformancePanel analytics={analytics} greeks={greeks} />
-        <TradeHistory data={trades} orderLogs={orderLogs} />
+        <TradeHistory
+          data={trades}
+          orderLogs={orderLogs}
+          equityCurve={analytics?.equity_curve}
+        />
         <RejectionTable
           data={rejections}
           onFilterChange={handleFilterChange}
