@@ -138,7 +138,7 @@ class AccountManager:
             "max_portfolio_vega": self._config.risk.max_portfolio_vega,
             "max_contracts_per_trade": self._config.risk.max_contracts_per_trade,
         }
-        risk_manager = RiskManager(risk_config, self._db, event_bus)
+        risk_manager = RiskManager(risk_config, event_bus)
 
         # Build executor
         exec_config = {

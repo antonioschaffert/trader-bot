@@ -16,7 +16,7 @@ export function AccountSwitcher({ accounts, activeAccountId, onSelect, onManageA
   const active = accounts.find((a) => a.account_id === activeAccountId);
 
   return (
-    <div className="relative inline-block">
+    <div className="flex items-center gap-2">
       <select
         value={activeAccountId}
         onChange={(e) => {
@@ -31,26 +31,19 @@ export function AccountSwitcher({ accounts, activeAccountId, onSelect, onManageA
         <option value="">All Accounts</option>
         {accounts.map((acct) => (
           <option key={acct.account_id} value={acct.account_id}>
-            {acct.name} ({acct.is_paper ? "Paper" : "Live"})
+            {acct.name}
             {!acct.enabled ? " [off]" : ""}
           </option>
         ))}
         <option value="__manage__">Manage Accounts...</option>
       </select>
       {active && (
-        <div className="mt-1 flex items-center gap-1.5">
-          <Badge variant={active.is_paper ? "secondary" : "destructive"} className="text-[10px] px-1.5 py-0">
-            {active.is_paper ? "Paper" : "Live"}
-          </Badge>
-          <span
-            className={`inline-block h-1.5 w-1.5 rounded-full ${
-              active.running ? "bg-green-500" : "bg-gray-400"
-            }`}
-          />
-          <span className="text-[10px] text-muted-foreground">
-            {active.running ? "Running" : "Stopped"}
-          </span>
-        </div>
+        <span
+          className={`inline-block h-2 w-2 rounded-full ${
+            active.running ? "bg-green-500" : "bg-gray-400"
+          }`}
+          title={active.running ? "Running" : "Stopped"}
+        />
       )}
     </div>
   );
