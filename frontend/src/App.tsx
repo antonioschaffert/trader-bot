@@ -1,4 +1,4 @@
-import { useState, useCallback, useMemo } from "react";
+import { useState, useCallback } from "react";
 import { api, hasCredentials } from "@/lib/api";
 import { usePolling } from "@/hooks/usePolling";
 import { StatusBar } from "@/components/StatusBar";
