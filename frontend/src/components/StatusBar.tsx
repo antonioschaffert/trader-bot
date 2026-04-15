@@ -49,10 +49,12 @@ export function StatusBar({ status, market, activeAccountId, onSelectAccount, on
           {botLabel}
         </span>
 
-        {/* Paper / Live badge (always shown) */}
-        <Badge variant={paperMode ? "secondary" : "destructive"}>
-          {paperMode ? "Paper" : "Live"}
-        </Badge>
+        {/* Paper / Live badge — only when a specific account is selected */}
+        {activeAccountId && (
+          <Badge variant={paperMode ? "secondary" : "destructive"}>
+            {paperMode ? "Paper" : "Live"}
+          </Badge>
+        )}
 
         {/* Account Switcher (shown when accounts exist) */}
         {accounts.length > 0 && (
