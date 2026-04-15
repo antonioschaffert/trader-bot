@@ -254,7 +254,7 @@ export function AccountsPanel({ open, onOpenChange }: Props) {
 
   return (
     <Sheet open={open} onOpenChange={onOpenChange}>
-      <SheetContent className="w-[420px] overflow-y-auto sm:max-w-md">
+      <SheetContent className="w-full overflow-y-auto sm:w-[420px] sm:max-w-md">
         <SheetHeader>
           <SheetTitle>Accounts</SheetTitle>
         </SheetHeader>

@@ -154,7 +154,7 @@ export function DailyRiskControl({ dailyPnl, settings, onSaved }: Props) {
           </div>
 
           {/* Quick risk params row */}
-          <div className="flex items-center gap-4 border-t pt-3 text-xs text-muted-foreground">
+          <div className="flex flex-wrap items-center gap-3 border-t pt-3 text-xs text-muted-foreground sm:gap-4">
             <span>Risk/Trade: <span className="font-medium text-foreground">{riskPerTrade}%</span></span>
             <span>Max Spreads: <span className="font-medium text-foreground">{maxSpreads}</span></span>
             <span>BP Limit: <span className="font-medium text-foreground">{bpUsage}%</span></span>

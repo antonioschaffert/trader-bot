@@ -359,6 +359,7 @@ export function PerformancePanel({ analytics, greeks }: Props) {
               <CardTitle>Strategy Breakdown</CardTitle>
             </CardHeader>
             <CardContent>
+              <div className="overflow-x-auto -mx-4 px-4 sm:mx-0 sm:px-0">
               <Table>
                 <TableHeader>
                   <TableRow>
@@ -395,6 +396,7 @@ export function PerformancePanel({ analytics, greeks }: Props) {
                   ))}
                 </TableBody>
               </Table>
+              </div>
             </CardContent>
           </Card>
         )}

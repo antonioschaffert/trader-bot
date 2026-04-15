@@ -385,7 +385,7 @@ export function SettingsPanel({ open, onClose, settings, onSaved }: Props) {
   if (!local) {
     return (
       <Sheet open={open} onOpenChange={(val) => !val && onClose()}>
-        <SheetContent side="right" className="w-[460px] overflow-y-auto sm:max-w-[460px]">
+        <SheetContent side="right" className="w-full overflow-y-auto sm:w-[460px] sm:max-w-[460px]">
           <SheetHeader>
             <SheetTitle>Settings</SheetTitle>
             <SheetDescription>Loading...</SheetDescription>
@@ -451,7 +451,7 @@ export function SettingsPanel({ open, onClose, settings, onSaved }: Props) {
 
   return (
     <Sheet open={open} onOpenChange={(val) => !val && onClose()}>
-      <SheetContent side="right" className="w-[460px] overflow-y-auto sm:max-w-[460px]">
+      <SheetContent side="right" className="w-full overflow-y-auto sm:w-[460px] sm:max-w-[460px]">
         <SheetHeader>
           <SheetTitle>Settings</SheetTitle>
           <SheetDescription>

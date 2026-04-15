@@ -61,7 +61,7 @@ function Dashboard() {
         onOpenSettings={() => setSettingsOpen(true)}
         onOpenAccounts={() => setAccountsOpen(true)}
       />
-      <main className="mx-auto max-w-7xl space-y-8 px-6 py-6">
+      <main className="mx-auto max-w-7xl space-y-6 px-4 py-4 sm:space-y-8 sm:px-6 sm:py-6">
         <ConfigHealthCheck settings={settings} />
         <MarketRegime
           regime={status?.regime ?? null}

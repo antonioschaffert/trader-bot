@@ -58,7 +58,7 @@ export function RejectionTable({ data, onFilterChange, symbols }: Props) {
 
   return (
     <section>
-      <div className="mb-4 flex items-center justify-between">
+      <div className="mb-4 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
         <h2 className="text-lg font-semibold">Scan Rejections</h2>
         <div className="flex items-center gap-2">
           <Select
@@ -104,6 +104,7 @@ export function RejectionTable({ data, onFilterChange, symbols }: Props) {
           No rejections found.
         </p>
       ) : (
+        <div className="overflow-x-auto -mx-2 px-2 sm:mx-0 sm:px-0">
         <Table>
           <TableHeader>
             <TableRow>
@@ -149,6 +150,7 @@ export function RejectionTable({ data, onFilterChange, symbols }: Props) {
             )}
           </TableBody>
         </Table>
+        </div>
       )}
     </section>
   );

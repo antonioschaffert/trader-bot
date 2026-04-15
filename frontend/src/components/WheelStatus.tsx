@@ -52,7 +52,7 @@ function PhaseIndicator({ phase }: { phase: string }) {
   const step = phaseStep(phase);
   const labels = ["Idle", "CSP", "Shares", "CC"];
   return (
-    <div className="flex items-center gap-1">
+    <div className="flex flex-wrap items-center gap-1">
       {labels.map((label, i) => (
         <div key={label} className="flex items-center">
           <div

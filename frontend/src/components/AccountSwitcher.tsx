@@ -51,7 +51,7 @@ export function AccountSwitcher({ accounts, activeAccountId, onSelect, onManageA
 
       {/* Dropdown */}
       {open && (
-        <div className="absolute left-0 top-full z-50 mt-1 w-64 rounded-lg border bg-background p-1 shadow-lg">
+        <div className="absolute left-0 top-full z-50 mt-1 w-[calc(100vw-2rem)] rounded-lg border bg-background p-1 shadow-lg sm:w-64">
           {/* All accounts option */}
           <button
             onClick={() => { onSelect(""); setOpen(false); }}

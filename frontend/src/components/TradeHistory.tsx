@@ -1,5 +1,5 @@
 import type { TradesResponse, OrderLog, EquityCurvePoint } from "@/lib/api";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Card, CardContent } from "@/components/ui/card";
 import {
   Table,
   TableBody,
@@ -136,7 +136,7 @@ function ActivityStream({ logs }: { logs: OrderLog[] }) {
         return (
           <div
             key={log._id}
-            className={`flex items-center gap-3 rounded-lg border px-4 py-3 ${
+            className={`flex items-center gap-3 rounded-lg border px-3 py-2.5 sm:px-4 sm:py-3 ${
               open
                 ? "border-l-4 border-l-green-500 bg-green-500/5"
                 : "border-l-4 border-l-blue-500 bg-blue-500/5"
@@ -153,7 +153,7 @@ function ActivityStream({ logs }: { logs: OrderLog[] }) {
 
             {/* Main content */}
             <div className="flex-1 min-w-0">
-              <div className="flex flex-wrap items-center gap-2">
+              <div className="flex flex-wrap items-center gap-1.5 sm:gap-2">
                 <span className="font-semibold">{symbol}</span>
                 <Badge
                   variant={open ? "default" : "secondary"}
@@ -234,7 +234,7 @@ export function TradeHistory({ data, orderLogs, equityCurve }: Props) {
           {tabs.map(({ key, label, count }) => (
             <button
               key={key}
-              className={`rounded-md px-4 py-2 text-sm font-medium transition-all ${
+              className={`rounded-md px-3 py-1.5 text-sm font-medium transition-all sm:px-4 sm:py-2 ${
                 tab === key
                   ? "bg-background text-foreground shadow-sm border"
                   : "text-muted-foreground hover:text-foreground hover:bg-background/50"
