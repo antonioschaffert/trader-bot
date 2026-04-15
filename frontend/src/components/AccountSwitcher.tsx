@@ -1,5 +1,4 @@
 import type { AccountStatus } from "@/lib/api";
-import { Badge } from "@/components/ui/badge";
 
 interface Props {
   accounts: AccountStatus[];
