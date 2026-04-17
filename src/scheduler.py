@@ -39,6 +39,27 @@ MARKET_OPEN = dtime(9, 30)
 MARKET_CLOSE = dtime(16, 0)
 
 
+def _latest_per_day(records: list[dict]) -> list[float]:
+    """
+    Collapse IV records to one value per calendar day (the latest timestamp wins).
+
+    Intraday IV prints are saved every scan cycle. Without this, a single
+    trading day can contribute dozens of samples to the "52-week" rank
+    calculation, biasing rank downward whenever IV spikes intraday.
+    """
+    by_day: dict = {}
+    for r in records:
+        ts = r.get("timestamp")
+        iv = r.get("iv")
+        if ts is None or iv is None:
+            continue
+        day = ts.date() if hasattr(ts, "date") else ts
+        existing = by_day.get(day)
+        if existing is None or ts > existing[0]:
+            by_day[day] = (ts, float(iv))
+    return [v[1] for v in by_day.values()]
+
+
 class TradingScheduler:
     def __init__(
         self, config: AppConfig, event_bus: EventBus, market_data: MarketDataClient,
@@ -237,7 +258,9 @@ class TradingScheduler:
 
         since = datetime.now(timezone.utc) - timedelta(weeks=52)
         iv_records = self._db.get_iv_history(symbol, since)
-        iv_history_values = [r["iv"] for r in iv_records]
+        # Dedupe to the latest record per day so intraday IV prints don't pollute
+        # the historical baseline (was biasing rank downward during intraday spikes).
+        iv_history_values = _latest_per_day(iv_records)
         current_iv = self._get_atm_iv(symbol, price)
         if current_iv > 0:
             self._db.save_iv_record({"symbol": symbol, "iv": current_iv, "timestamp": scan_time})
@@ -355,6 +378,12 @@ class TradingScheduler:
         self._update_position_value(position)
         days_to_exp = (position.expiration - datetime.now(timezone.utc).date()).days
 
+        # Track peak profit fraction (of max profit, i.e. entry credit).
+        if position.entry_premium > 0:
+            profit_pct = (position.entry_premium - position.current_value) / position.entry_premium
+            if profit_pct > position.peak_profit_pct:
+                position.peak_profit_pct = profit_pct
+
         if self._risk_manager.check_dte_exit(days_to_exp):
             logger.info(f"DTE exit for {position.order_id}")
             self._executor.submit_close_order(position.legs, limit_price=position.current_value)
@@ -365,6 +394,17 @@ class TradingScheduler:
             self._executor.submit_close_order(position.legs, limit_price=position.current_value)
             self._positions.close_position(position.order_id, position.current_value, "profit_target")
             self._bus.publish("ProfitTargetHit", {"position": position})
+            return
+
+        if self._risk_manager.check_trailing_stop(
+            position.current_value, position.entry_premium, position.peak_profit_pct
+        ):
+            logger.info(
+                f"Trailing stop for {position.order_id}: peak {position.peak_profit_pct:.0%}"
+            )
+            self._executor.submit_close_order(position.legs, limit_price=position.current_value)
+            self._positions.close_position(position.order_id, position.current_value, "trailing_stop")
+            self._bus.publish("TrailingStopHit", {"position": position})
             return
 
         if position.strategy_mode == "swing":
@@ -443,7 +483,7 @@ class TradingScheduler:
         # IV data for conviction scoring
         since = datetime.now(timezone.utc) - timedelta(weeks=52)
         iv_records = self._db.get_iv_history(symbol, since)
-        iv_history_values = [r["iv"] for r in iv_records]
+        iv_history_values = _latest_per_day(iv_records)
         current_iv = self._get_atm_iv(symbol, price)
         iv_rank = compute_iv_rank(current_iv, iv_history_values) if iv_history_values and current_iv > 0 else None
         iv_percentile = compute_iv_percentile(current_iv, iv_history_values) if iv_history_values and current_iv > 0 else None
@@ -700,6 +740,12 @@ class TradingScheduler:
             "target_dte": c.swing.target_dte, "short_strike_delta": c.swing.short_strike_delta,
             "spread_width": c.swing.spread_width, "min_premium": c.swing.min_premium,
             "iv_rank_threshold": c.swing.iv_rank_threshold, "profit_target_pct": c.swing.profit_target_pct,
+            "iv_percentile_threshold": c.swing.iv_percentile_threshold,
+            "min_open_interest": c.swing.min_open_interest,
+            "max_bid_ask_spread_pct": c.swing.max_bid_ask_spread_pct,
+            "slippage_buffer_pct": c.swing.slippage_buffer_pct,
+            "sr_buffer_pct_min": c.swing.sr_buffer_pct_min,
+            "allow_delta_fallback": c.swing.allow_delta_fallback,
         }
         self._exhaustion_gen._config = {
             "enabled": c.exhaustion.enabled, "target_dte": c.exhaustion.target_dte,
@@ -713,6 +759,9 @@ class TradingScheduler:
             "min_move_from_open_pct": c.exhaustion.min_move_from_open_pct,
             "strong_move_pct": c.exhaustion.strong_move_pct,
             "close_by_eod": c.exhaustion.close_by_eod,
+            "min_open_interest": c.exhaustion.min_open_interest,
+            "max_bid_ask_spread_pct": c.exhaustion.max_bid_ask_spread_pct,
+            "slippage_buffer_pct": c.exhaustion.slippage_buffer_pct,
         }
         self._risk_manager._config = {
             "max_concurrent_spreads": c.risk.max_concurrent_spreads,
@@ -726,6 +775,9 @@ class TradingScheduler:
             "max_correlated_same_direction": c.risk.max_correlated_same_direction,
             "max_portfolio_vega": c.risk.max_portfolio_vega,
             "max_contracts_per_trade": c.risk.max_contracts_per_trade,
+            "slippage_buffer_pct": c.risk.slippage_buffer_pct,
+            "trailing_stop_activation_pct": c.risk.trailing_stop_activation_pct,
+            "trailing_stop_giveback_pct": c.risk.trailing_stop_giveback_pct,
         }
         # Wheel strategy config
         if self._wheel_gen:

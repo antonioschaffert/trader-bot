@@ -8,7 +8,14 @@ swing:
     QQQ: 3
   min_premium: 0.50
   iv_rank_threshold: 30
+  iv_percentile_threshold: 20        # require current IV to be above 20th percentile of 52w distribution
   profit_target_pct: 50
+  # Liquidity / execution guardrails (prevent selling into wide or illiquid markets)
+  min_open_interest: 250              # reject contracts with OI below this
+  max_bid_ask_spread_pct: 0.25        # reject contracts where spread > 25% of mid
+  slippage_buffer_pct: 0.10           # assume 10% haircut from mid when building net credit
+  sr_buffer_pct_min: 0.025            # minimum 2.5% buffer from support/resistance
+  allow_delta_fallback: false         # don't guess strikes when Greeks are missing
 
 exhaustion:
   enabled: true
@@ -23,10 +30,13 @@ exhaustion:
   rsi_overbought: 70
   rsi_oversold: 30
   intraday_timeframe: "5min"
-  min_signals_required: 3
+  min_signals_required: 4              # was 3 - raised after adding climax signal to avoid bogus fades
   min_move_from_open_pct: 0.8
   strong_move_pct: 1.5
   close_by_eod: true
+  min_open_interest: 150
+  max_bid_ask_spread_pct: 0.30
+  slippage_buffer_pct: 0.10
 
 risk:
   max_concurrent_spreads: 10
@@ -39,6 +49,11 @@ risk:
   daily_income_target: 500
   max_same_direction_per_symbol: 3
   max_portfolio_delta_per_symbol: 0.30
+  # Slippage buffer applied to target_premium when validating risk & sizing.
+  slippage_buffer_pct: 0.10
+  # Trailing stop (protects realized gains once position has been profitable).
+  trailing_stop_activation_pct: 40     # arm after position reaches 40% of max profit
+  trailing_stop_giveback_pct: 50       # exit if we give back >= 50% of peak profit
   # Enhanced risk settings
   max_correlated_same_direction: 4   # max same-direction across correlated assets (SPY+QQQ)
   max_portfolio_vega: 500            # max vega exposure ($ impact per 1pt IV move)

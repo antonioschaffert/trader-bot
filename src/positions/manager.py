@@ -22,6 +22,10 @@ class TrackedSpread:
     opened_at: datetime
     current_value: float = 0.0
     unrealized_pnl: float = 0.0
+    # Highest fraction of max profit seen since entry (0.0 - 1.0+). Used by
+    # the trailing-stop exit to lock in gains after the position has been
+    # materially profitable.
+    peak_profit_pct: float = 0.0
 
 
 class PositionManager:

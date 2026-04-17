@@ -137,6 +137,9 @@ class AccountManager:
             "max_correlated_same_direction": self._config.risk.max_correlated_same_direction,
             "max_portfolio_vega": self._config.risk.max_portfolio_vega,
             "max_contracts_per_trade": self._config.risk.max_contracts_per_trade,
+            "slippage_buffer_pct": self._config.risk.slippage_buffer_pct,
+            "trailing_stop_activation_pct": self._config.risk.trailing_stop_activation_pct,
+            "trailing_stop_giveback_pct": self._config.risk.trailing_stop_giveback_pct,
         }
         risk_manager = RiskManager(risk_config, event_bus)
 
@@ -159,6 +162,12 @@ class AccountManager:
             "min_premium": self._config.swing.min_premium,
             "iv_rank_threshold": self._config.swing.iv_rank_threshold,
             "profit_target_pct": self._config.swing.profit_target_pct,
+            "iv_percentile_threshold": self._config.swing.iv_percentile_threshold,
+            "min_open_interest": self._config.swing.min_open_interest,
+            "max_bid_ask_spread_pct": self._config.swing.max_bid_ask_spread_pct,
+            "slippage_buffer_pct": self._config.swing.slippage_buffer_pct,
+            "sr_buffer_pct_min": self._config.swing.sr_buffer_pct_min,
+            "allow_delta_fallback": self._config.swing.allow_delta_fallback,
         }, event_bus)
 
         exhaustion_gen = ExhaustionSignalGenerator({
@@ -176,6 +185,9 @@ class AccountManager:
             "min_move_from_open_pct": self._config.exhaustion.min_move_from_open_pct,
             "strong_move_pct": self._config.exhaustion.strong_move_pct,
             "close_by_eod": self._config.exhaustion.close_by_eod,
+            "min_open_interest": self._config.exhaustion.min_open_interest,
+            "max_bid_ask_spread_pct": self._config.exhaustion.max_bid_ask_spread_pct,
+            "slippage_buffer_pct": self._config.exhaustion.slippage_buffer_pct,
         }, event_bus)
 
         # Wheel components (if wheel strategy enabled for this account)

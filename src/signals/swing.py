@@ -14,6 +14,7 @@ import logging
 
 from src.event_bus import EventBus
 from src.market_data.models import MarketSnapshot, OptionContract
+from src.signals.filters import filter_liquid, passes_liquidity, realistic_net_credit
 from src.signals.models import EvaluationResult, SpreadLeg, TradeSignal
 
 logger = logging.getLogger(__name__)
@@ -27,6 +28,7 @@ class SwingSignalGenerator:
     def evaluate(self, snapshot: MarketSnapshot) -> EvaluationResult:
         result = EvaluationResult()
         iv_threshold = self._config["iv_rank_threshold"]
+        iv_pct_threshold = self._config.get("iv_percentile_threshold", 0)
 
         # IV rank check (skip if threshold is 0)
         if iv_threshold > 0:
@@ -40,6 +42,20 @@ class SwingSignalGenerator:
                 result.rejections.append({
                     "strategy": "swing", "reason": "iv_rank_below_threshold",
                     "variables": {"iv_rank": round(snapshot.iv_rank, 1), "threshold": iv_threshold},
+                })
+                return result
+
+        # Secondary IV percentile check: rank alone can be fooled by a single
+        # stale historical outlier; percentile confirms current IV is elevated
+        # relative to the full distribution.
+        if iv_pct_threshold > 0 and snapshot.iv_percentile is not None:
+            if snapshot.iv_percentile < iv_pct_threshold:
+                result.rejections.append({
+                    "strategy": "swing", "reason": "iv_percentile_below_threshold",
+                    "variables": {
+                        "iv_percentile": round(snapshot.iv_percentile, 1),
+                        "threshold": iv_pct_threshold,
+                    },
                 })
                 return result
 
@@ -158,27 +174,32 @@ class SwingSignalGenerator:
         delta_range = params["delta_range"]
         min_premium = params["min_premium"]
 
-        short_put = self._find_short_strike(snapshot.options_chain.puts, delta_range)
+        # Pre-filter the chain by target expiration (prefer nearest) and liquidity
+        candidate_puts = self._select_target_expiration(snapshot.options_chain.puts)
+        candidate_puts = self._apply_liquidity(candidate_puts)
+
+        short_put = self._find_short_strike(candidate_puts, delta_range)
         if not short_put:
             return None
 
-        # Support awareness: don't sell puts AT a support level
+        # Support awareness: require short strike to sit a meaningful buffer
+        # below support. Use ATR when available (volatility-adjusted), else 2.5%.
         support = snapshot.indicators.support
-        if support and short_put.strike_price >= support * 0.99:
-            # Try to find a strike below support
-            adjusted_puts = [c for c in snapshot.options_chain.puts if c.strike_price < support * 0.98]
+        buffer_pct = self._support_buffer_pct(snapshot)
+        if support and short_put.strike_price >= support * (1 - buffer_pct):
+            adjusted_puts = [c for c in candidate_puts if c.strike_price < support * (1 - buffer_pct)]
             if adjusted_puts:
-                short_put = self._find_short_strike(adjusted_puts, delta_range)
-                if not short_put:
-                    return None
-            # If no strikes below support, proceed but note it
+                alt = self._find_short_strike(adjusted_puts, delta_range)
+                if alt:
+                    short_put = alt
 
         target_long_strike = short_put.strike_price - spread_width
-        long_put = self._find_nearest_strike(snapshot.options_chain.puts, target_long_strike)
+        long_put = self._find_nearest_strike(candidate_puts, target_long_strike)
         if not long_put:
             return None
 
-        net_credit = short_put.mid_price - long_put.mid_price
+        slippage = self._config.get("slippage_buffer_pct", 0.0)
+        net_credit = realistic_net_credit(short_put, long_put, slippage_pct=slippage)
         if net_credit < min_premium:
             return None
 
@@ -233,25 +254,30 @@ class SwingSignalGenerator:
         delta_range = params["delta_range"]
         min_premium = params["min_premium"]
 
-        short_call = self._find_short_strike(snapshot.options_chain.calls, delta_range)
+        candidate_calls = self._select_target_expiration(snapshot.options_chain.calls)
+        candidate_calls = self._apply_liquidity(candidate_calls)
+
+        short_call = self._find_short_strike(candidate_calls, delta_range)
         if not short_call:
             return None
 
-        # Resistance awareness: don't sell calls AT a resistance level
+        # Resistance awareness with volatility-adjusted buffer.
         resistance = snapshot.indicators.resistance
-        if resistance and short_call.strike_price <= resistance * 1.01:
-            adjusted_calls = [c for c in snapshot.options_chain.calls if c.strike_price > resistance * 1.02]
+        buffer_pct = self._support_buffer_pct(snapshot)
+        if resistance and short_call.strike_price <= resistance * (1 + buffer_pct):
+            adjusted_calls = [c for c in candidate_calls if c.strike_price > resistance * (1 + buffer_pct)]
             if adjusted_calls:
-                short_call = self._find_short_strike(adjusted_calls, delta_range)
-                if not short_call:
-                    return None
+                alt = self._find_short_strike(adjusted_calls, delta_range)
+                if alt:
+                    short_call = alt
 
         target_long_strike = short_call.strike_price + spread_width
-        long_call = self._find_nearest_strike(snapshot.options_chain.calls, target_long_strike)
+        long_call = self._find_nearest_strike(candidate_calls, target_long_strike)
         if not long_call:
             return None
 
-        net_credit = short_call.mid_price - long_call.mid_price
+        slippage = self._config.get("slippage_buffer_pct", 0.0)
+        net_credit = realistic_net_credit(short_call, long_call, slippage_pct=slippage)
         if net_credit < min_premium:
             return None
 
@@ -351,25 +377,61 @@ class SwingSignalGenerator:
 
     def _find_short_strike(self, contracts: list[OptionContract], delta_range: list[float]) -> OptionContract | None:
         min_delta, max_delta = delta_range
-        candidates = [
-            c for c in contracts
-            if min_delta <= abs(c.delta) <= max_delta and c.open_interest > 0 and c.mid_price > 0
-        ]
-        if not candidates:
-            # Fallback: if no delta data, use all contracts with volume
-            candidates = [c for c in contracts if c.mid_price > 0 and c.open_interest > 0]
-            if not candidates:
-                return None
-            # Pick by target OTM distance (~4% OTM as fallback)
-            target = (min_delta + max_delta) / 2
-            return min(candidates, key=lambda c: abs(abs(c.delta) - target) if c.delta != 0 else 999)
+        in_delta = [c for c in contracts if min_delta <= abs(c.delta) <= max_delta and c.mid_price > 0]
         target = (min_delta + max_delta) / 2
-        return min(candidates, key=lambda c: abs(abs(c.delta) - target))
+        if in_delta:
+            return min(in_delta, key=lambda c: abs(abs(c.delta) - target))
+        # No contract has delta data in range. Only fall back if explicitly allowed.
+        # Otherwise we refuse the signal — guessing by %-OTM can give 0.5 delta strikes.
+        if not self._config.get("allow_delta_fallback", False):
+            return None
+        with_mid = [c for c in contracts if c.mid_price > 0]
+        if not with_mid:
+            return None
+        return min(with_mid, key=lambda c: abs(abs(c.delta) - target) if c.delta else 999)
 
     def _find_nearest_strike(self, contracts: list[OptionContract], target_strike: float) -> OptionContract | None:
         if not contracts:
             return None
         return min(contracts, key=lambda c: abs(c.strike_price - target_strike))
+
+    def _apply_liquidity(self, contracts: list[OptionContract]) -> list[OptionContract]:
+        """Filter contracts by configured OI and bid-ask spread thresholds."""
+        return filter_liquid(
+            contracts,
+            min_open_interest=self._config.get("min_open_interest", 1),
+            max_spread_pct=self._config.get("max_bid_ask_spread_pct", 0.0),
+        )
+
+    def _select_target_expiration(self, contracts: list[OptionContract]) -> list[OptionContract]:
+        """
+        Prefer the nearest expiration inside the target DTE window.
+
+        Theta decay is nonlinear; concentrating on the shortest DTE in the
+        allowed range improves theta capture and reduces gamma exposure across
+        the life of the trade.
+        """
+        if not contracts:
+            return contracts
+        expirations = sorted({c.expiration_date for c in contracts})
+        if not expirations:
+            return contracts
+        nearest = expirations[0]
+        return [c for c in contracts if c.expiration_date == nearest]
+
+    def _support_buffer_pct(self, snapshot: MarketSnapshot) -> float:
+        """
+        Return the fractional buffer required between the short strike and the
+        support/resistance level. Uses ATR when available so the buffer scales
+        with the symbol's realized volatility; falls back to 2.5%.
+        """
+        atr = snapshot.indicators.atr_14
+        price = snapshot.price
+        configured_min = self._config.get("sr_buffer_pct_min", 0.025)
+        if atr and price > 0:
+            # 1 ATR of headroom, clamped to [configured_min, 6%]
+            return max(configured_min, min(atr / price, 0.06))
+        return configured_min
 
 
 def _adx_label(adx: float) -> str:

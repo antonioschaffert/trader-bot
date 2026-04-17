@@ -15,6 +15,13 @@ class SwingConfig:
     min_premium: float
     iv_rank_threshold: int
     profit_target_pct: int
+    # Quality / execution filters
+    iv_percentile_threshold: int = 0
+    min_open_interest: int = 0
+    max_bid_ask_spread_pct: float = 0.0
+    slippage_buffer_pct: float = 0.0
+    sr_buffer_pct_min: float = 0.025
+    allow_delta_fallback: bool = False
 
 
 @dataclass
@@ -33,6 +40,9 @@ class ExhaustionConfig:
     min_move_from_open_pct: float
     strong_move_pct: float
     close_by_eod: bool
+    min_open_interest: int = 0
+    max_bid_ask_spread_pct: float = 0.0
+    slippage_buffer_pct: float = 0.0
 
 
 @dataclass
@@ -61,6 +71,9 @@ class RiskConfig:
     max_correlated_same_direction: int = 4
     max_portfolio_vega: float = 500.0
     max_contracts_per_trade: int = 10
+    slippage_buffer_pct: float = 0.10
+    trailing_stop_activation_pct: int = 0     # 0 disables
+    trailing_stop_giveback_pct: int = 50
     drawdown: DrawdownConfig = field(default_factory=DrawdownConfig)
 
 

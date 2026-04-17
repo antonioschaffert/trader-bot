@@ -121,7 +121,11 @@ class RiskManager:
         equity = float(getattr(account, "equity", 50000))
         max_risk_dollars = equity * (max_risk_pct / 100)
         spread_width = self._calculate_spread_width(signal)
-        trade_risk = (spread_width - signal.target_premium) * 100
+        # Assume execution slippage — we size against the realistic (worse) fill,
+        # not the mid-price credit we hope to get. Protects against bad-fill days.
+        slippage = self._config.get("slippage_buffer_pct", 0.10)
+        realistic_premium = signal.target_premium * (1.0 - max(0.0, slippage))
+        trade_risk = (spread_width - realistic_premium) * 100
         if trade_risk > max_risk_dollars:
             return ValidationResult(
                 False,
@@ -156,7 +160,9 @@ class RiskManager:
         """
         spread_width = self._calculate_spread_width(signal)
         max_risk_per_trade = equity * (self._config.get("max_risk_per_trade_pct", 5) / 100)
-        risk_per_contract = (spread_width - signal.target_premium) * 100
+        slippage = self._config.get("slippage_buffer_pct", 0.10)
+        realistic_premium = signal.target_premium * (1.0 - max(0.0, slippage))
+        risk_per_contract = (spread_width - realistic_premium) * 100
 
         if risk_per_contract <= 0:
             return 1
@@ -216,6 +222,35 @@ class RiskManager:
         loss = current_value - entry_premium
         max_loss = entry_premium * multiplier
         return loss >= max_loss
+
+    def check_trailing_stop(
+        self,
+        current_value: float,
+        entry_premium: float,
+        peak_profit_pct: float,
+    ) -> bool:
+        """
+        Lock in gains once the position has printed a material profit.
+
+        Example config defaults:
+          trailing_stop_activation_pct = 40  (only arm after +40% of max profit)
+          trailing_stop_giveback_pct   = 50  (exit if we've surrendered >= 50%
+                                              of the peak profit)
+
+        Math: profit_pct is (entry - current) / entry expressed in [0..1+].
+        """
+        if entry_premium <= 0:
+            return False
+        activation = self._config.get("trailing_stop_activation_pct", 0) / 100.0
+        if activation <= 0:
+            return False
+        if peak_profit_pct < activation:
+            return False
+        giveback = self._config.get("trailing_stop_giveback_pct", 50) / 100.0
+        profit_pct = (entry_premium - current_value) / entry_premium
+        # Exit when we've given back `giveback` fraction of the peak profit.
+        trigger = peak_profit_pct * (1.0 - giveback)
+        return profit_pct <= trigger
 
     def check_roll_needed(self, short_delta: float, threshold: float) -> bool:
         return abs(short_delta) >= threshold

@@ -14,6 +14,7 @@ from datetime import datetime, time as dtime
 
 from src.event_bus import EventBus
 from src.market_data.models import Bar, MarketSnapshot, OptionContract
+from src.signals.filters import filter_liquid, realistic_net_credit
 from src.signals.models import EvaluationResult, SpreadLeg, TradeSignal
 
 logger = logging.getLogger(__name__)
@@ -162,6 +163,10 @@ class ExhaustionSignalGenerator:
         if ind.relative_volume is not None and ind.relative_volume < 0.8:
             score += 1
 
+        # 11. (NEW) Volume climax earlier in session with cool-down (textbook exhaustion)
+        if self._has_volume_climax(snapshot.intraday_bars):
+            score += 1
+
         return score
 
     def _score_downside_exhaustion(self, snapshot: MarketSnapshot, move_pct: float) -> int:
@@ -203,17 +208,59 @@ class ExhaustionSignalGenerator:
         if ind.relative_volume is not None and ind.relative_volume < 0.8:
             score += 1
 
+        # (NEW) Volume climax earlier in session with cool-down
+        if self._has_volume_climax(snapshot.intraday_bars):
+            score += 1
+
         return score
 
     def _is_volume_declining(self, bars: list[Bar]) -> bool:
+        """
+        True if recent bars are running notably below the earlier-session average.
+
+        A textbook exhaustion print has a volume climax during the move, then
+        a marked drop as buyers/sellers run out. We check for both: the last 3
+        bars must be below 60% of the first-half average AND the peak volume
+        must have occurred earlier in the window (not on the final bar).
+        """
         if len(bars) < 6:
             return False
         mid = len(bars) // 2
         first_half_avg = sum(b.volume for b in bars[:mid]) / mid
-        last_3_avg = sum(b.volume for b in bars[-3:]) / 3
-        if first_half_avg == 0:
+        if first_half_avg <= 0:
             return False
-        return last_3_avg < first_half_avg * 0.6
+        last_3_avg = sum(b.volume for b in bars[-3:]) / 3
+        if last_3_avg >= first_half_avg * 0.6:
+            return False
+        # The peak volume bar should not be the final bar - a late volume
+        # spike often signals trend continuation, not exhaustion.
+        max_vol_idx = max(range(len(bars)), key=lambda i: bars[i].volume)
+        if max_vol_idx >= len(bars) - 1:
+            return False
+        return True
+
+    def _has_volume_climax(self, bars: list[Bar]) -> bool:
+        """
+        True if an earlier bar in the window had a dramatic volume spike
+        (>= 1.5x the window average) and subsequent volume cooled. This is
+        separate from `_is_volume_declining` and acts as an additional
+        confirmation signal.
+        """
+        if len(bars) < 6:
+            return False
+        vols = [b.volume for b in bars]
+        avg = sum(vols) / len(vols)
+        if avg <= 0:
+            return False
+        peak = max(vols)
+        peak_idx = vols.index(peak)
+        # Peak must be notable AND happen in the first 2/3 of the window
+        if peak < avg * 1.5:
+            return False
+        if peak_idx >= (len(bars) * 2) // 3:
+            return False
+        # And the final bar must be well below peak
+        return vols[-1] < peak * 0.5
 
     def _is_momentum_stalling(self, bars: list[Bar], direction: str) -> bool:
         if len(bars) < 6:
@@ -273,17 +320,20 @@ class ExhaustionSignalGenerator:
             prem_mult = getattr(regime, "premium_threshold_multiplier", 1.0)
             min_premium *= prem_mult
 
+        calls = self._apply_liquidity(snapshot.options_chain.calls)
+
         target_short_strike = snapshot.price
-        short_call = self._find_nearest_at_or_above(snapshot.options_chain.calls, target_short_strike)
+        short_call = self._find_nearest_at_or_above(calls, target_short_strike)
         if not short_call:
             return None
 
         target_long_strike = short_call.strike_price + spread_width
-        long_call = self._find_nearest_strike(snapshot.options_chain.calls, target_long_strike)
+        long_call = self._find_nearest_strike(calls, target_long_strike)
         if not long_call:
             return None
 
-        net_credit = short_call.mid_price - long_call.mid_price
+        slippage = self._config.get("slippage_buffer_pct", 0.0)
+        net_credit = realistic_net_credit(short_call, long_call, slippage_pct=slippage)
         if net_credit < min_premium:
             return None
 
@@ -335,17 +385,20 @@ class ExhaustionSignalGenerator:
             prem_mult = getattr(regime, "premium_threshold_multiplier", 1.0)
             min_premium *= prem_mult
 
+        puts = self._apply_liquidity(snapshot.options_chain.puts)
+
         target_short_strike = snapshot.price
-        short_put = self._find_nearest_at_or_below(snapshot.options_chain.puts, target_short_strike)
+        short_put = self._find_nearest_at_or_below(puts, target_short_strike)
         if not short_put:
             return None
 
         target_long_strike = short_put.strike_price - spread_width
-        long_put = self._find_nearest_strike(snapshot.options_chain.puts, target_long_strike)
+        long_put = self._find_nearest_strike(puts, target_long_strike)
         if not long_put:
             return None
 
-        net_credit = short_put.mid_price - long_put.mid_price
+        slippage = self._config.get("slippage_buffer_pct", 0.0)
+        net_credit = realistic_net_credit(short_put, long_put, slippage_pct=slippage)
         if net_credit < min_premium:
             return None
 
@@ -386,6 +439,14 @@ class ExhaustionSignalGenerator:
             profit_target_pct=self._config["profit_target_pct"],
             reasoning=reasoning,
             regime_context=getattr(regime, "volatility_regime", "") if regime else "",
+        )
+
+    def _apply_liquidity(self, contracts: list[OptionContract]) -> list[OptionContract]:
+        """Filter contracts by configured OI and bid-ask spread thresholds."""
+        return filter_liquid(
+            contracts,
+            min_open_interest=self._config.get("min_open_interest", 1),
+            max_spread_pct=self._config.get("max_bid_ask_spread_pct", 0.0),
         )
 
     def _find_nearest_at_or_above(self, contracts: list[OptionContract], target: float) -> OptionContract | None:
