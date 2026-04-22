@@ -7,10 +7,13 @@ client = TestClient(app)
 
 def _mock_db(scan_doc=None, settings_doc=None, heartbeat_doc=None):
     mock = MagicMock()
+    accounts_col = MagicMock()
+    accounts_col.find.return_value = []
     collections = {
         "scan_rejections": MagicMock(),
         "settings": MagicMock(),
         "heartbeat": MagicMock(),
+        "accounts": accounts_col,
     }
     mock.__getitem__ = MagicMock(side_effect=lambda name: collections[name])
     collections["scan_rejections"].find_one.return_value = scan_doc

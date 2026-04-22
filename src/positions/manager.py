@@ -77,6 +77,76 @@ class PositionManager:
     def get_positions_by_symbol(self, symbol: str) -> list[TrackedSpread]:
         return [p for p in self.open_positions if p.symbol == symbol]
 
+    def sync_from_alpaca(self, trading_client) -> None:
+        """Load existing positions from Alpaca so stop losses and profit targets work after restart."""
+        try:
+            alpaca_positions = trading_client.get_all_positions()
+            if not alpaca_positions:
+                return
+
+            # Group option positions by underlying + expiration
+            from collections import defaultdict
+            groups = defaultdict(list)
+            for p in alpaca_positions:
+                sym = p.symbol
+                # Option symbols: SPY260421P00675000 → underlying=SPY, exp=260421, type=P, strike=675
+                if len(sym) >= 15 and (sym[-9] == 'P' or sym[-9] == 'C'):
+                    underlying = sym[:-15]
+                    exp_str = sym[-15:-9]
+                    try:
+                        exp_date = date(2000 + int(exp_str[:2]), int(exp_str[2:4]), int(exp_str[4:6]))
+                    except ValueError:
+                        continue
+                    groups[(underlying, exp_date)].append(p)
+
+            synced = 0
+            for (underlying, exp_date), legs in groups.items():
+                short_legs = [p for p in legs if int(p.qty) < 0]
+                long_legs = [p for p in legs if int(p.qty) > 0]
+
+                if not short_legs:
+                    continue  # Not a spread we wrote
+
+                # Determine spread type from the short leg
+                short = short_legs[0]
+                is_put = short.symbol[-9] == 'P'
+                spread_type = "put_spread" if is_put else "call_spread"
+
+                # Build legs
+                spread_legs = []
+                for p in legs:
+                    strike = float(p.symbol[-8:]) / 1000
+                    spread_legs.append(SpreadLeg(
+                        symbol=p.symbol,
+                        strike=strike,
+                        side="sell" if int(p.qty) < 0 else "buy",
+                        delta=0.0,
+                    ))
+
+                # Estimate entry premium from cost basis
+                total_cost = sum(float(p.cost_basis) for p in legs)
+                entry_premium = abs(total_cost) / 100 / max(abs(int(short.qty)), 1)
+
+                spread = TrackedSpread(
+                    order_id=f"synced_{underlying}_{exp_date}",
+                    strategy_mode="swing",
+                    symbol=underlying,
+                    spread_type=spread_type,
+                    legs=spread_legs,
+                    expiration=exp_date,
+                    entry_premium=entry_premium,
+                    profit_target_pct=50,
+                    opened_at=datetime.now(timezone.utc),
+                )
+                self.open_positions.append(spread)
+                synced += 1
+
+            if synced:
+                logger.info(f"Synced {synced} spread(s) from Alpaca ({len(alpaca_positions)} raw positions)")
+
+        except Exception:
+            logger.exception("Failed to sync positions from Alpaca")
+
     def reset_daily(self) -> None:
         self.daily_pnl = 0.0
         self._closed_today = []

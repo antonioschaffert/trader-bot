@@ -148,8 +148,9 @@ class AccountManager:
         }
         executor = OrderExecutor(trading_client, self._db, exec_config, event_bus)
 
-        # Build position manager
+        # Build position manager and sync existing positions from Alpaca
         position_manager = PositionManager(self._db, event_bus)
+        position_manager.sync_from_alpaca(trading_client)
 
         # Build signal generators
         swing_gen = SwingSignalGenerator({
